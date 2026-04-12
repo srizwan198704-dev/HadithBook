@@ -28,11 +28,10 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // স্ট্যাটাসবার এবং নেভিগেশন বার ভিজিবল রাখুন
+        // স্ট্যাটাসবার এবং নেভিগেশন বার ভিজিবল রাখার জন্য সেটিংস
         WindowCompat.setDecorFitsSystemWindows(window, true)
-        WindowInsetsControllerCompat(window, window.decorView).let { controller ->
-            controller.show(WindowInsetsCompat.Type.systemBars())
-        }
+        val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
+        windowInsetsController.show(WindowInsetsCompat.Type.systemBars())
 
         webView = findViewById(R.id.webView)
         setupWebView()
@@ -62,7 +61,6 @@ class MainActivity : AppCompatActivity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
 
-        // WebView ক্লায়েন্ট সেটআপ
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
@@ -81,19 +79,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.webChromeClient = WebChromeClient()
-
-        // জাভাস্ক্রিপ্ট ইন্টারফেস যোগ করুন
         webView.addJavascriptInterface(AndroidJavaScriptInterface(), "AndroidApp")
     }
 
     private fun loadAppContent() {
         val htmlContent = generateMainHTML()
-
-        // HTML ফাইল ক্যাশে সেভ করুন
         val htmlFile = File(filesDir, "index.html")
         htmlFile.writeText(htmlContent)
-
-        // WebView এ লোড করুন
         webView.loadUrl("file://${htmlFile.absolutePath}")
     }
 
@@ -103,8 +95,8 @@ class MainActivity : AppCompatActivity() {
 <html lang="bn">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=no">
-    <meta name="description" content="ইসলামী বিশ্বকোষ ও আল হাদিস - আল কুরআন, হাদিস, ইসলামী বই ও ইসলামী তথ্য ভান্ডারের সমাহার">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="description" content="ইসলামী বিশ্বকোষ ও আল হাদিস">
     <title>হাদিস সমগ্র</title>
     <style>
         @font-face {
@@ -131,6 +123,7 @@ class MainActivity : AppCompatActivity() {
             color: #333;
             line-height: 1.6;
             -webkit-tap-highlight-color: transparent;
+            padding-bottom: env(safe-area-inset-bottom);
         }
         
         .toolbar {
@@ -542,7 +535,7 @@ class MainActivity : AppCompatActivity() {
                 box.innerHTML = 
                     '<div class="book-id-badge">' + toBanglaNumber(section.sequence || 0) + '</div>' +
                     '<div class="book-title-en">' + safeString(section.title, 'অধ্যায়') + '</div>' +
-                    '<div class="book-title-ar">' + safeString(section.title_ar, 'الباب') + '</div>' +
+                    '<div class="book-title-ar">' + safeString(section.title_ar, 'البাব') + '</div>' +
                     '<div class="book-meta">' +
                         '<span>📖 ' + toBanglaNumber(section.total_hadith || 0) + ' হাদিস</span>' +
                         rangeText +
@@ -620,12 +613,13 @@ class MainActivity : AppCompatActivity() {
             const hadith = findHadithByNumber(hadithNumber);
             if (!hadith) return;
             
-            const text = currentState.bookTitle + '\n' +
-                        currentState.sectionTitle + '\n' +
-                        'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number) + '\n' +
-                        (hadith.title || '') + '\n' +
-                        (hadith.description_ar || '') + '\n' +
-                        (hadith.description || '');
+            // শেয়ার টেক্সটে সরাসরি ব্যাকটিক ব্যবহার করে মাল্টিলাইন টেক্সট পাঠানো হচ্ছে যাতে \n না আসে
+            const text = `${currentState.bookTitle}
+${currentState.sectionTitle}
+হাদিস নং: ${toBanglaNumber(hadith.hadith_number)}
+${hadith.title || ''}
+${hadith.description_ar || ''}
+${hadith.description || ''}`;
             
             if (typeof AndroidApp !== 'undefined') {
                 AndroidApp.copyToClipboard(text);
@@ -637,13 +631,16 @@ class MainActivity : AppCompatActivity() {
             const hadith = findHadithByNumber(hadithNumber);
             if (!hadith) return;
             
-            const text = currentState.bookTitle + '\n\n' +
-                        currentState.sectionTitle + '\n\n' +
-                        'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number) + '\n' +
-                        (hadith.title || '') + '\n' +
-                        (hadith.description_ar || '') + '\n' +
-                        (hadith.description || '') + '\n\n' +
-                        'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস';
+            const text = `${currentState.bookTitle}
+
+${currentState.sectionTitle}
+
+হাদিস নং: ${toBanglaNumber(hadith.hadith_number)}
+${hadith.title || ''}
+${hadith.description_ar || ''}
+${hadith.description || ''}
+
+অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস`;
             
             if (typeof AndroidApp !== 'undefined') {
                 AndroidApp.shareText(text);
@@ -724,7 +721,6 @@ class MainActivity : AppCompatActivity() {
             } else if (currentState.page === 'sections') {
                 loadBooks();
             } else {
-                // Main books page - signal to Android to finish
                 if (typeof AndroidApp !== 'undefined') {
                     AndroidApp.finishActivity();
                 }
@@ -788,20 +784,24 @@ class MainActivity : AppCompatActivity() {
         
         @android.webkit.JavascriptInterface
         fun copyToClipboard(text: String) {
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            val clip = android.content.ClipData.newPlainText("হাদিস", text)
-            clipboard.setPrimaryClip(clip)
+            runOnUiThread {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val clip = android.content.ClipData.newPlainText("হাদিস", text)
+                clipboard.setPrimaryClip(clip)
+            }
         }
         
         @android.webkit.JavascriptInterface
         fun shareText(text: String) {
-            val sendIntent = android.content.Intent().apply {
-                action = android.content.Intent.ACTION_SEND
-                putExtra(android.content.Intent.EXTRA_TEXT, text)
-                type = "text/plain"
+            runOnUiThread {
+                val sendIntent = android.content.Intent().apply {
+                    action = android.content.Intent.ACTION_SEND
+                    putExtra(android.content.Intent.EXTRA_TEXT, text)
+                    type = "text/plain"
+                }
+                val shareIntent = android.content.Intent.createChooser(sendIntent, "শেয়ার করুন")
+                startActivity(shareIntent)
             }
-            val shareIntent = android.content.Intent.createChooser(sendIntent, "শেয়ার করুন")
-            startActivity(shareIntent)
         }
         
         private fun getCacheFileName(key: String): String {
@@ -840,21 +840,16 @@ class MainActivity : AppCompatActivity() {
         """.trimIndent()) { result ->
             
             try {
-                // JSON পার্স করে চেক করুন
                 val cleanResult = result.replace("\\\"", "\"").trim('"')
                 
                 if (cleanResult.contains("\"page\":\"books\"")) {
-                    // Main Book পেজে থাকলে অ্যাপ ফিনিশ হবে
                     super.onBackPressed()
                 } else if (cleanResult.contains("\"page\":\"sections\"") || cleanResult.contains("\"page\":\"hadith\"")) {
-                    // অন্য পেজে থাকলে ওয়েবভিউতে ব্যাক নেভিগেশন
                     webView.evaluateJavascript("handleBack()", null)
                 } else {
-                    // ডিফল্ট ব্যাক
                     super.onBackPressed()
                 }
             } catch (e: Exception) {
-                // কোনো এরর হলে ডিফল্ট ব্যাক
                 super.onBackPressed()
             }
         }
