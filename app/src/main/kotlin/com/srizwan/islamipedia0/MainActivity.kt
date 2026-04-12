@@ -566,6 +566,7 @@ class MainActivity : AppCompatActivity() {
         async function loadBooks() {
             currentState = { page: 'books', bookId: null, sectionId: null, bookTitle: '', sectionTitle: '' };
             updateToolbar('হাদিস সমগ্র', false);
+            window.scrollTo(0, 0);
             showLoading();
             try {
                 const data = await fetchData(
@@ -607,6 +608,7 @@ class MainActivity : AppCompatActivity() {
         async function loadSections(bookId, bookTitle) {
             currentState = { page: 'sections', bookId: bookId, sectionId: null, bookTitle: bookTitle, sectionTitle: '' };
             updateToolbar(bookTitle, true);
+            window.scrollTo(0, 0);
             showLoading();
             try {
                 const cacheKey = 'sections_' + bookId;
@@ -658,6 +660,7 @@ class MainActivity : AppCompatActivity() {
                 bookTitle: currentState.bookTitle, sectionTitle: sectionTitle
             };
             updateToolbar(sectionTitle, true);
+            window.scrollTo(0, 0);
             showLoading();
             try {
                 const cacheKey = 'hadith_' + bookId + '_' + sectionId;
