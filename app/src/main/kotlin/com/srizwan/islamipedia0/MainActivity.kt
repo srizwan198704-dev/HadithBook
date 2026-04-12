@@ -472,8 +472,8 @@ class MainActivity : AppCompatActivity() {
                     '<div class="book-title-en">' + safeString(book.title_en, 'Title') + '</div>' +
                     '<div class="book-title-ar">' + safeString(book.title_ar, 'العنوان') + '</div>' +
                     '<div class="book-meta">' +
-                        '<span>📚 ' + toBanglaNumber(book.total_section || 0) + ' অধ্যায়</span>' +
-                        '<span>📖 ' + toBanglaNumber(book.total_hadith || 0) + ' হাদিস</span>' +
+                        '<span>📚 ' + toBanglaNumber(book.total_section || 0) + ' টি অধ্যায়</span>' +
+                        '<span>📖 ' + toBanglaNumber(book.total_hadith || 0) + ' টি হাদিস</span>' +
                     '</div>';
                 container.appendChild(box);
             });
@@ -532,7 +532,7 @@ class MainActivity : AppCompatActivity() {
 
                 let rangeText = '';
                 if (section.range_start && section.range_end) {
-                    rangeText = '<span>🔢 ' + toBanglaNumber(section.range_start) + '-' + toBanglaNumber(section.range_end) + '</span>';
+                    rangeText = '<span>🔢 ব্যাপ্তি: ' + toBanglaNumber(section.range_start) + '-' + toBanglaNumber(section.range_end) + '</span>';
                 }
 
                 box.innerHTML =
@@ -540,7 +540,7 @@ class MainActivity : AppCompatActivity() {
                     '<div class="book-title-en">' + safeString(section.title, 'অধ্যায়') + '</div>' +
                     '<div class="book-title-ar">' + safeString(section.title_ar, 'الباب') + '</div>' +
                     '<div class="book-meta">' +
-                        '<span>📖 ' + toBanglaNumber(section.total_hadith || 0) + ' হাদিস</span>' +
+                        '<span>📖 মোট ' + toBanglaNumber(section.total_hadith || 0) + ' টি হাদিস</span>' +
                         rangeText +
                     '</div>';
                 container.appendChild(box);
