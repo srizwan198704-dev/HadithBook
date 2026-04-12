@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Bundle
+import android.view.View
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -27,11 +28,10 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // ফুলস্ক্রিন মোড সেটআপ - সোয়াইপ করে স্ট্যাটাস/নেভিগেশন বার আনা যাবে
-        WindowCompat.setDecorFitsSystemWindows(window, false)
+        // স্ট্যাটাসবার এবং নেভিগেশন বার ভিজিবল রাখুন
+        WindowCompat.setDecorFitsSystemWindows(window, true)
         WindowInsetsControllerCompat(window, window.decorView).let { controller ->
-            controller.hide(WindowInsetsCompat.Type.systemBars())
-            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.show(WindowInsetsCompat.Type.systemBars())
         }
 
         webView = findViewById(R.id.webView)
@@ -620,10 +620,11 @@ class MainActivity : AppCompatActivity() {
             const hadith = findHadithByNumber(hadithNumber);
             if (!hadith) return;
             
-            const text = currentState.bookTitle + '\\n' +
-                        'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number) + '\\n' +
-                        (hadith.title || '') + '\\n' +
-                        (hadith.description_ar || '') + '\\n' +
+            const text = currentState.bookTitle + '\n' +
+                        currentState.sectionTitle + '\n' +
+                        'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number) + '\n' +
+                        (hadith.title || '') + '\n' +
+                        (hadith.description_ar || '') + '\n' +
                         (hadith.description || '');
             
             if (typeof AndroidApp !== 'undefined') {
@@ -636,11 +637,12 @@ class MainActivity : AppCompatActivity() {
             const hadith = findHadithByNumber(hadithNumber);
             if (!hadith) return;
             
-            const text = currentState.bookTitle + '\\n\\n' +
-                        'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number) + '\\n' +
-                        (hadith.title || '') + '\\n' +
-                        (hadith.description_ar || '') + '\\n' +
-                        (hadith.description || '') + '\\n\\n' +
+            const text = currentState.bookTitle + '\n\n' +
+                        currentState.sectionTitle + '\n\n' +
+                        'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number) + '\n' +
+                        (hadith.title || '') + '\n' +
+                        (hadith.description_ar || '') + '\n' +
+                        (hadith.description || '') + '\n\n' +
                         'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস';
             
             if (typeof AndroidApp !== 'undefined') {
