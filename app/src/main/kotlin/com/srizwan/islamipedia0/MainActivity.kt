@@ -1,10 +1,11 @@
 package com.srizwan.islamipedia0
 
 import android.content.Context
+import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.Bundle
-import android.view.View
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -28,21 +29,23 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // স্ট্যাটাসবার এবং নেভিগেশন বার ভিজিবল রাখার জন্য সেটিংস
+        // Status bar ও Navigation bar দৃশ্যমান রাখুন
         WindowCompat.setDecorFitsSystemWindows(window, true)
-        val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
-        windowInsetsController.show(WindowInsetsCompat.Type.systemBars())
+        val insetsController = WindowInsetsControllerCompat(window, window.decorView)
+        insetsController.show(WindowInsetsCompat.Type.systemBars())
+
+        // Status bar ও Navigation bar রঙ সেট করুন
+        window.statusBarColor = Color.parseColor("#01837A")
+        window.navigationBarColor = Color.BLACK
 
         webView = findViewById(R.id.webView)
         setupWebView()
 
-        // ক্যাশে ডিরেক্টরি তৈরি
         val cacheDir = File(filesDir, cacheDirName)
         if (!cacheDir.exists()) {
             cacheDir.mkdirs()
         }
 
-        // অ্যাপ লোড করুন
         loadAppContent()
     }
 
@@ -95,8 +98,8 @@ class MainActivity : AppCompatActivity() {
 <html lang="bn">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="description" content="ইসলামী বিশ্বকোষ ও আল হাদিস">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=no">
+    <meta name="description" content="ইসলামী বিশ্বকোষ ও আল হাদিস - আল কুরআন, হাদিস, ইসলামী বই ও ইসলামী তথ্য ভান্ডারের সমাহার">
     <title>হাদিস সমগ্র</title>
     <style>
         @font-face {
@@ -123,7 +126,6 @@ class MainActivity : AppCompatActivity() {
             color: #333;
             line-height: 1.6;
             -webkit-tap-highlight-color: transparent;
-            padding-bottom: env(safe-area-inset-bottom);
         }
         
         .toolbar {
@@ -535,7 +537,7 @@ class MainActivity : AppCompatActivity() {
                 box.innerHTML = 
                     '<div class="book-id-badge">' + toBanglaNumber(section.sequence || 0) + '</div>' +
                     '<div class="book-title-en">' + safeString(section.title, 'অধ্যায়') + '</div>' +
-                    '<div class="book-title-ar">' + safeString(section.title_ar, 'البাব') + '</div>' +
+                    '<div class="book-title-ar">' + safeString(section.title_ar, 'الباب') + '</div>' +
                     '<div class="book-meta">' +
                         '<span>📖 ' + toBanglaNumber(section.total_hadith || 0) + ' হাদিস</span>' +
                         rangeText +
@@ -609,17 +611,23 @@ class MainActivity : AppCompatActivity() {
             return currentDisplayData.find(h => h.hadith_number == number);
         }
         
+        // ✅ FIX: \n এর বদলে real newline ব্যবহার করতে buildText() ফাংশন
+        function buildText(parts) {
+            return parts.filter(p => p && p.trim() !== '').join('\n');
+        }
+        
         function copyHadith(hadithNumber) {
             const hadith = findHadithByNumber(hadithNumber);
             if (!hadith) return;
             
-            // শেয়ার টেক্সটে সরাসরি ব্যাকটিক ব্যবহার করে মাল্টিলাইন টেক্সট পাঠানো হচ্ছে যাতে \n না আসে
-            const text = `${currentState.bookTitle}
-${currentState.sectionTitle}
-হাদিস নং: ${toBanglaNumber(hadith.hadith_number)}
-${hadith.title || ''}
-${hadith.description_ar || ''}
-${hadith.description || ''}`;
+            const text = buildText([
+                currentState.bookTitle,
+                currentState.sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '',
+                hadith.description_ar || '',
+                hadith.description || ''
+            ]);
             
             if (typeof AndroidApp !== 'undefined') {
                 AndroidApp.copyToClipboard(text);
@@ -631,16 +639,15 @@ ${hadith.description || ''}`;
             const hadith = findHadithByNumber(hadithNumber);
             if (!hadith) return;
             
-            const text = `${currentState.bookTitle}
-
-${currentState.sectionTitle}
-
-হাদিস নং: ${toBanglaNumber(hadith.hadith_number)}
-${hadith.title || ''}
-${hadith.description_ar || ''}
-${hadith.description || ''}
-
-অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস`;
+            const text = buildText([
+                currentState.bookTitle,
+                currentState.sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '',
+                hadith.description_ar || '',
+                hadith.description || '',
+                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস'
+            ]);
             
             if (typeof AndroidApp !== 'undefined') {
                 AndroidApp.shareText(text);
@@ -767,7 +774,6 @@ ${hadith.description || ''}
                 if (!cacheDir.exists()) {
                     cacheDir.mkdirs()
                 }
-                
                 val cacheFile = File(cacheDir, getCacheFileName(key))
                 cacheFile.writeText(data)
             } catch (e: Exception) {
@@ -784,11 +790,9 @@ ${hadith.description || ''}
         
         @android.webkit.JavascriptInterface
         fun copyToClipboard(text: String) {
-            runOnUiThread {
-                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                val clip = android.content.ClipData.newPlainText("হাদিস", text)
-                clipboard.setPrimaryClip(clip)
-            }
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            val clip = android.content.ClipData.newPlainText("হাদিস", text)
+            clipboard.setPrimaryClip(clip)
         }
         
         @android.webkit.JavascriptInterface
@@ -815,7 +819,6 @@ ${hadith.description || ''}
         val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = connectivityManager.activeNetwork ?: return false
         val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
-        
         return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
@@ -838,10 +841,8 @@ ${hadith.description || ''}
                 return JSON.stringify({page: 'unknown', canGoBack: false});
             })();
         """.trimIndent()) { result ->
-            
             try {
                 val cleanResult = result.replace("\\\"", "\"").trim('"')
-                
                 if (cleanResult.contains("\"page\":\"books\"")) {
                     super.onBackPressed()
                 } else if (cleanResult.contains("\"page\":\"sections\"") || cleanResult.contains("\"page\":\"hadith\"")) {
