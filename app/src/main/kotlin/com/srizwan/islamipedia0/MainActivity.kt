@@ -27,7 +27,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // ফুলস্ক্রিন মোড সেটআপ
+        // ফুলস্ক্রিন মোড সেটআপ - সোয়াইপ করে স্ট্যাটাস/নেভিগেশন বার আনা যাবে
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).let { controller ->
             controller.hide(WindowInsetsCompat.Type.systemBars())
@@ -722,8 +722,9 @@ class MainActivity : AppCompatActivity() {
             } else if (currentState.page === 'sections') {
                 loadBooks();
             } else {
+                // Main books page - signal to Android to finish
                 if (typeof AndroidApp !== 'undefined') {
-                    AndroidApp.backButtonClicked();
+                    AndroidApp.finishActivity();
                 }
             }
         }
@@ -740,7 +741,7 @@ class MainActivity : AppCompatActivity() {
     inner class AndroidJavaScriptInterface {
         
         @android.webkit.JavascriptInterface
-        fun backButtonClicked() {
+        fun finishActivity() {
             runOnUiThread {
                 finish()
             }
@@ -824,8 +825,34 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onBackPressed() {
-        webView.evaluateJavascript("javascript:handleBack()") { result ->
-            if (result == "null" || result == "false") {
+        webView.evaluateJavascript("""
+            (function() {
+                if (typeof currentState !== 'undefined') {
+                    return JSON.stringify({
+                        page: currentState.page,
+                        canGoBack: currentState.page !== 'books'
+                    });
+                }
+                return JSON.stringify({page: 'unknown', canGoBack: false});
+            })();
+        """.trimIndent()) { result ->
+            
+            try {
+                // JSON পার্স করে চেক করুন
+                val cleanResult = result.replace("\\\"", "\"").trim('"')
+                
+                if (cleanResult.contains("\"page\":\"books\"")) {
+                    // Main Book পেজে থাকলে অ্যাপ ফিনিশ হবে
+                    super.onBackPressed()
+                } else if (cleanResult.contains("\"page\":\"sections\"") || cleanResult.contains("\"page\":\"hadith\"")) {
+                    // অন্য পেজে থাকলে ওয়েবভিউতে ব্যাক নেভিগেশন
+                    webView.evaluateJavascript("handleBack()", null)
+                } else {
+                    // ডিফল্ট ব্যাক
+                    super.onBackPressed()
+                }
+            } catch (e: Exception) {
+                // কোনো এরর হলে ডিফল্ট ব্যাক
                 super.onBackPressed()
             }
         }
