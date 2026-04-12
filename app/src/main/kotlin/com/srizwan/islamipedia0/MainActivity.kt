@@ -28,14 +28,12 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Status bar ও Navigation bar দৃশ্যমান রাখুন, overflow হবে না
         WindowCompat.setDecorFitsSystemWindows(window, true)
         val insetsController = WindowInsetsControllerCompat(window, window.decorView)
         insetsController.show(WindowInsetsCompat.Type.systemBars())
         insetsController.isAppearanceLightStatusBars = false
         insetsController.isAppearanceLightNavigationBars = false
 
-        // Status bar ও Navigation bar রঙ সেট করুন
         window.statusBarColor = Color.parseColor("#01837A")
         window.navigationBarColor = Color.BLACK
 
@@ -43,9 +41,7 @@ class MainActivity : AppCompatActivity() {
         setupWebView()
 
         val cacheDir = File(filesDir, cacheDirName)
-        if (!cacheDir.exists()) {
-            cacheDir.mkdirs()
-        }
+        if (!cacheDir.exists()) cacheDir.mkdirs()
 
         loadAppContent()
     }
@@ -69,16 +65,11 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
             }
-
             override fun onReceivedError(
-                view: WebView?,
-                request: WebResourceRequest?,
-                error: WebResourceError?
+                view: WebView?, request: WebResourceRequest?, error: WebResourceError?
             ) {
                 super.onReceivedError(view, request, error)
-                if (!isNetworkAvailable()) {
-                    showOfflineMessage()
-                }
+                if (!isNetworkAvailable()) showOfflineMessage()
             }
         }
 
@@ -87,9 +78,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadAppContent() {
-        val htmlContent = generateMainHTML()
         val htmlFile = File(filesDir, "index.html")
-        htmlFile.writeText(htmlContent)
+        htmlFile.writeText(generateMainHTML())
         webView.loadUrl("file://${htmlFile.absolutePath}")
     }
 
@@ -108,18 +98,13 @@ class MainActivity : AppCompatActivity() {
             src: url('file:///android_asset/fonts/SolaimanLipi.ttf') format('truetype');
             font-display: swap;
         }
-
         @font-face {
             font-family: 'Noorehuda';
             src: url('file:///android_asset/fonts/noorehuda.ttf') format('truetype');
             font-display: swap;
         }
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: 'SolaimanLipi', sans-serif;
@@ -140,13 +125,7 @@ class MainActivity : AppCompatActivity() {
             top: 0;
             z-index: 100;
         }
-
-        .toolbar-icon {
-            width: 24px;
-            height: 24px;
-            cursor: pointer;
-        }
-
+        .toolbar-icon { width: 24px; height: 24px; cursor: pointer; }
         .toolbar-title {
             flex: 1;
             text-align: center;
@@ -167,11 +146,7 @@ class MainActivity : AppCompatActivity() {
             top: 60px;
             z-index: 99;
         }
-
-        .search-container.active {
-            display: block;
-        }
-
+        .search-container.active { display: block; }
         .search-input {
             width: 100%;
             padding: 10px 15px;
@@ -198,47 +173,29 @@ class MainActivity : AppCompatActivity() {
             position: relative;
             cursor: pointer;
         }
-
         .book-id-badge {
             position: absolute;
-            top: -12px;
-            left: -12px;
+            top: -12px; left: -12px;
             background: #01837A;
             color: white;
-            width: 35px;
-            height: 35px;
+            width: 35px; height: 35px;
             border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            font-size: 16px;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: bold; font-size: 16px;
         }
-
         .book-title-en {
-            font-size: 18px;
-            font-weight: bold;
-            color: #01837A;
-            margin-bottom: 8px;
-            padding-left: 20px;
+            font-size: 18px; font-weight: bold;
+            color: #01837A; margin-bottom: 8px; padding-left: 20px;
         }
-
         .book-title-ar {
             font-family: 'Noorehuda', sans-serif;
-            font-size: 18px;
-            text-align: right;
-            color: #333;
-            margin: 15px 0;
-            direction: rtl;
+            font-size: 18px; text-align: right;
+            color: #333; margin: 15px 0; direction: rtl;
         }
-
         .book-meta {
-            display: flex;
-            justify-content: space-between;
-            padding-top: 10px;
-            border-top: 1px dashed #ddd;
-            font-size: 14px;
-            color: #666;
+            display: flex; justify-content: space-between;
+            padding-top: 10px; border-top: 1px dashed #ddd;
+            font-size: 14px; color: #666;
         }
 
         .hadith-box {
@@ -249,91 +206,198 @@ class MainActivity : AppCompatActivity() {
             box-shadow: 0 3px 10px rgba(0,0,0,0.1);
             border: 2px solid #01837A;
         }
-
         .hadith-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
+            display: flex; justify-content: space-between;
+            align-items: center; margin-bottom: 15px;
         }
-
         .hadith-number {
-            background: #01837A;
-            color: white;
-            padding: 5px 15px;
-            border-radius: 20px;
-            font-weight: bold;
-            font-size: 14px;
+            background: #01837A; color: white;
+            padding: 5px 15px; border-radius: 20px;
+            font-weight: bold; font-size: 14px;
         }
-
-        .action-buttons {
-            display: flex;
-            gap: 10px;
-        }
-
-        .action-icon {
-            width: 24px;
-            height: 24px;
-            cursor: pointer;
-        }
-
+        .action-buttons { display: flex; gap: 10px; }
+        .action-icon { width: 24px; height: 24px; cursor: pointer; }
         .hadith-title {
-            font-size: 18px;
-            font-weight: bold;
-            color: #01837A;
-            margin: 12px 0;
+            font-size: 18px; font-weight: bold;
+            color: #01837A; margin: 12px 0;
         }
-
         .hadith-description-ar {
             font-family: 'Noorehuda', sans-serif;
-            font-size: 20px;
-            color: #333;
-            margin: 15px 0;
-            text-align: right;
-            direction: rtl;
+            font-size: 20px; color: #333;
+            margin: 15px 0; text-align: right; direction: rtl;
         }
-
         .hadith-description {
-            font-size: 16px;
-            color: #444;
-            margin: 15px 0;
-            text-align: justify;
+            font-size: 16px; color: #444;
+            margin: 15px 0; text-align: justify;
         }
 
         .loading-state {
-            text-align: center;
-            padding: 30px;
-            color: #01837A;
-            font-size: 18px;
+            text-align: center; padding: 30px;
+            color: #01837A; font-size: 18px;
+        }
+        .error-state {
+            text-align: center; padding: 30px;
+            color: #e74c3c; font-size: 16px;
+        }
+        .offline-indicator {
+            background: #ff9800; color: white;
+            text-align: center; padding: 5px;
+            font-size: 12px; display: none;
+        }
+        .retry-button {
+            background: #01837A; color: white;
+            border: none; padding: 10px 20px;
+            border-radius: 25px;
+            font-family: 'SolaimanLipi', sans-serif;
+            font-size: 14px; margin-top: 15px; cursor: pointer;
         }
 
-        .error-state {
+        /* ========== GLOBAL SEARCH POPUP ========== */
+        .global-search-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 999;
+        }
+        .global-search-overlay.active { display: flex; flex-direction: column; }
+
+        .global-search-popup {
+            background: white;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .global-search-header {
+            background: #01837A;
+            color: white;
+            padding: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+        .global-search-header-title {
+            font-size: 18px;
+            font-weight: bold;
+            flex: 1;
+        }
+        .global-search-close {
+            width: 24px; height: 24px;
+            cursor: pointer;
+        }
+
+        .global-search-input-wrap {
+            padding: 12px 15px;
+            background: #f0fffe;
+            border-bottom: 1px solid #ddd;
+            flex-shrink: 0;
+        }
+        .global-search-input {
+            width: 100%;
+            padding: 10px 15px;
+            border: 2px solid #01837A;
+            border-radius: 25px;
+            font-family: 'SolaimanLipi', sans-serif;
+            font-size: 16px;
+            outline: none;
+        }
+
+        .global-search-status {
+            padding: 8px 15px;
+            font-size: 13px;
+            color: #666;
+            background: #f9f9f9;
+            border-bottom: 1px solid #eee;
+            flex-shrink: 0;
+            min-height: 35px;
+        }
+
+        .global-search-results {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px 15px;
+        }
+
+        .global-search-hint {
             text-align: center;
-            padding: 30px;
-            color: #e74c3c;
+            padding: 40px 20px;
+            color: #999;
             font-size: 16px;
         }
 
-        .offline-indicator {
-            background: #ff9800;
-            color: white;
-            text-align: center;
-            padding: 5px;
+        .gs-hadith-box {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border: 2px solid #01837A;
+        }
+        .gs-hadith-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .gs-hadith-number {
+            background: #01837A; color: white;
+            padding: 4px 12px; border-radius: 20px;
+            font-weight: bold; font-size: 13px;
+        }
+        .gs-book-label {
             font-size: 12px;
-            display: none;
+            color: #01837A;
+            background: #e8f8f7;
+            padding: 3px 10px;
+            border-radius: 12px;
+            border: 1px solid #01837A;
+        }
+        .gs-action-buttons { display: flex; gap: 8px; }
+        .gs-action-icon { width: 22px; height: 22px; cursor: pointer; }
+        .gs-hadith-title {
+            font-size: 16px; font-weight: bold;
+            color: #01837A; margin: 8px 0;
+        }
+        .gs-hadith-description-ar {
+            font-family: 'Noorehuda', sans-serif;
+            font-size: 18px; color: #333;
+            margin: 10px 0; text-align: right; direction: rtl;
+        }
+        .gs-hadith-description {
+            font-size: 15px; color: #444;
+            margin: 10px 0; text-align: justify;
+        }
+        .gs-loading {
+            text-align: center; padding: 20px;
+            color: #01837A; font-size: 16px;
+        }
+        .gs-no-result {
+            text-align: center; padding: 30px;
+            color: #999; font-size: 16px;
         }
 
-        .retry-button {
+        /* Floating global search button */
+        .fab-global-search {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 52px;
+            height: 52px;
             background: #01837A;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 25px;
-            font-family: 'SolaimanLipi', sans-serif;
-            font-size: 14px;
-            margin-top: 15px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
             cursor: pointer;
+            z-index: 200;
         }
+        .fab-global-search img { width: 26px; height: 26px; }
     </style>
 </head>
 <body>
@@ -355,6 +419,35 @@ class MainActivity : AppCompatActivity() {
         <div class="loading-state">লোড হচ্ছে...</div>
     </div>
 
+    <!-- Floating Global Search Button -->
+    <div class="fab-global-search" onclick="openGlobalSearch()" title="সম্পূর্ণ হাদিস সার্চ">
+        <img src="file:///android_asset/images/search.png" alt="Global Search">
+    </div>
+
+    <!-- Global Search Popup -->
+    <div class="global-search-overlay" id="globalSearchOverlay">
+        <div class="global-search-popup">
+            <div class="global-search-header">
+                <img src="file:///android_asset/images/back.png" class="global-search-close" onclick="closeGlobalSearch()" alt="Close">
+                <div class="global-search-header-title">সম্পূর্ণ হাদিস সার্চ</div>
+            </div>
+            <div class="global-search-input-wrap">
+                <input type="text" class="global-search-input" id="globalSearchInput"
+                    placeholder="হাদিস নম্বর, শিরোনাম বা বাংলা/আরবি লিখুন..."
+                    oninput="handleGlobalSearch(this.value)">
+            </div>
+            <div class="global-search-status" id="globalSearchStatus">
+                সার্চ করতে টাইপ করুন...
+            </div>
+            <div class="global-search-results" id="globalSearchResults">
+                <div class="global-search-hint">
+                    🔍 সমস্ত হাদিস বই থেকে সার্চ করুন<br><br>
+                    <small>হাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         let currentState = {
             page: 'books',
@@ -372,19 +465,24 @@ class MainActivity : AppCompatActivity() {
 
         let currentDisplayData = [];
 
+        // ====== Global Search State ======
+        let globalSearchTimeout = null;
+        let allBooksData = null;
+        let globalSearchActive = false;
+        let globalSearchAbortFlag = false;
+
         const toBanglaNumber = (num) => {
             if (num === null || num === undefined || isNaN(num)) return '০';
             const banglaDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
             return num.toString().replace(/\d/g, digit => banglaDigits[digit]);
         };
 
-        const safeString = (str, fallback) => {
-            return str || fallback || 'তথ্য নেই';
-        };
+        const safeString = (str, fallback) => str || fallback || 'তথ্য নেই';
 
         const updateToolbar = (title, showBack) => {
             document.getElementById('pageTitle').textContent = title;
-            document.getElementById('backButton').style.display = showBack ? 'block' : 'none';
+            // প্রথম পেজেও back button দেখাবে
+            document.getElementById('backButton').style.display = 'block';
         };
 
         const showLoading = () => {
@@ -409,18 +507,14 @@ class MainActivity : AppCompatActivity() {
                         return JSON.parse(cached);
                     }
                 }
-
                 const response = await fetch(url);
                 if (!response.ok) throw new Error('Network error');
                 const data = await response.json();
-
                 if (typeof AndroidApp !== 'undefined') {
                     AndroidApp.cacheData(cacheKey, JSON.stringify(data));
                 }
-
                 document.getElementById('offlineIndicator').style.display = 'none';
                 return data;
-
             } catch (error) {
                 if (typeof AndroidApp !== 'undefined') {
                     const cached = AndroidApp.getCachedData(cacheKey);
@@ -437,17 +531,15 @@ class MainActivity : AppCompatActivity() {
             currentState = { page: 'books', bookId: null, sectionId: null, bookTitle: '', sectionTitle: '' };
             updateToolbar('হাদিস সমগ্র', false);
             showLoading();
-
             try {
                 const data = await fetchData(
                     'https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/book-title.json',
                     'hadith_books_list'
                 );
-
                 cachedData.books = data;
+                allBooksData = data;
                 currentDisplayData = data;
                 renderBooks(data);
-
             } catch (error) {
                 showError('বই লোড করতে সমস্যা হয়েছে', loadBooks);
             }
@@ -455,14 +547,11 @@ class MainActivity : AppCompatActivity() {
 
         function renderBooks(books) {
             const container = document.getElementById('contentContainer');
-
             if (!books || books.length === 0) {
                 container.innerHTML = '<div class="error-state">কোন বই পাওয়া যায়নি</div>';
                 return;
             }
-
             container.innerHTML = '';
-
             books.sort((a, b) => (a.sequence || 0) - (b.sequence || 0)).forEach(book => {
                 const box = document.createElement('div');
                 box.className = 'book-box';
@@ -480,21 +569,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         async function loadSections(bookId, bookTitle) {
-            currentState = {
-                page: 'sections',
-                bookId: bookId,
-                sectionId: null,
-                bookTitle: bookTitle,
-                sectionTitle: ''
-            };
-
+            currentState = { page: 'sections', bookId: bookId, sectionId: null, bookTitle: bookTitle, sectionTitle: '' };
             updateToolbar(bookTitle, true);
             showLoading();
-
             try {
                 const cacheKey = 'sections_' + bookId;
                 let data = cachedData.sections[bookId];
-
                 if (!data) {
                     data = await fetchData(
                         'https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/' + bookId + '/title.json',
@@ -502,10 +582,8 @@ class MainActivity : AppCompatActivity() {
                     );
                     cachedData.sections[bookId] = data;
                 }
-
                 currentDisplayData = data;
                 renderSections(data);
-
             } catch (error) {
                 showError('অধ্যায় লোড করতে সমস্যা হয়েছে', () => loadSections(bookId, bookTitle));
             }
@@ -513,28 +591,19 @@ class MainActivity : AppCompatActivity() {
 
         function renderSections(sections) {
             const container = document.getElementById('contentContainer');
-
             if (!sections || sections.length === 0) {
                 container.innerHTML = '<div class="error-state">কোন অধ্যায় পাওয়া যায়নি</div>';
                 return;
             }
-
             container.innerHTML = '';
-
             sections.sort((a, b) => (a.sequence || 0) - (b.sequence || 0)).forEach(section => {
                 const box = document.createElement('div');
                 box.className = 'book-box';
-                box.onclick = () => loadHadith(
-                    currentState.bookId,
-                    section.id,
-                    safeString(section.title, 'অধ্যায়')
-                );
-
+                box.onclick = () => loadHadith(currentState.bookId, section.id, safeString(section.title, 'অধ্যায়'));
                 let rangeText = '';
                 if (section.range_start && section.range_end) {
                     rangeText = '<span>🔢 ব্যাপ্তি: ' + toBanglaNumber(section.range_start) + '-' + toBanglaNumber(section.range_end) + '</span>';
                 }
-
                 box.innerHTML =
                     '<div class="book-id-badge">' + toBanglaNumber(section.sequence || 0) + '</div>' +
                     '<div class="book-title-en">' + safeString(section.title, 'অধ্যায়') + '</div>' +
@@ -549,21 +618,15 @@ class MainActivity : AppCompatActivity() {
 
         async function loadHadith(bookId, sectionId, sectionTitle) {
             currentState = {
-                page: 'hadith',
-                bookId: bookId,
-                sectionId: sectionId,
-                bookTitle: currentState.bookTitle,
-                sectionTitle: sectionTitle
+                page: 'hadith', bookId: bookId, sectionId: sectionId,
+                bookTitle: currentState.bookTitle, sectionTitle: sectionTitle
             };
-
             updateToolbar(sectionTitle, true);
             showLoading();
-
             try {
                 const cacheKey = 'hadith_' + bookId + '_' + sectionId;
                 const dataKey = bookId + '_' + sectionId;
                 let data = cachedData.hadith[dataKey];
-
                 if (!data) {
                     data = await fetchData(
                         'https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/' + bookId + '/hadith/' + sectionId + '.json',
@@ -571,10 +634,8 @@ class MainActivity : AppCompatActivity() {
                     );
                     cachedData.hadith[dataKey] = data;
                 }
-
                 currentDisplayData = data;
                 renderHadith(data);
-
             } catch (error) {
                 showError('হাদিস লোড করতে সমস্যা হয়েছে', () => loadHadith(bookId, sectionId, sectionTitle));
             }
@@ -582,14 +643,11 @@ class MainActivity : AppCompatActivity() {
 
         function renderHadith(hadithList) {
             const container = document.getElementById('contentContainer');
-
             if (!hadithList || hadithList.length === 0) {
                 container.innerHTML = '<div class="error-state">কোন হাদিস পাওয়া যায়নি</div>';
                 return;
             }
-
             container.innerHTML = '';
-
             hadithList.sort((a, b) => (a.hadith_number || 0) - (b.hadith_number || 0)).forEach(hadith => {
                 const box = document.createElement('div');
                 box.className = 'hadith-box';
@@ -619,16 +677,11 @@ class MainActivity : AppCompatActivity() {
         function copyHadith(hadithNumber) {
             const hadith = findHadithByNumber(hadithNumber);
             if (!hadith) return;
-
             const text = buildText([
-                currentState.bookTitle,
-                currentState.sectionTitle,
+                currentState.bookTitle, currentState.sectionTitle,
                 'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
-                hadith.title || '',
-                hadith.description_ar || '',
-                hadith.description || ''
+                hadith.title || '', hadith.description_ar || '', hadith.description || ''
             ]);
-
             if (typeof AndroidApp !== 'undefined') {
                 AndroidApp.copyToClipboard(text);
                 AndroidApp.showToast('কপি করা হয়েছে!');
@@ -638,80 +691,56 @@ class MainActivity : AppCompatActivity() {
         function shareHadith(hadithNumber) {
             const hadith = findHadithByNumber(hadithNumber);
             if (!hadith) return;
-
             const text = buildText([
-                currentState.bookTitle,
-                currentState.sectionTitle,
+                currentState.bookTitle, currentState.sectionTitle,
                 'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
-                hadith.title || '',
-                hadith.description_ar || '',
-                hadith.description || '',
+                hadith.title || '', hadith.description_ar || '', hadith.description || '',
                 'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
             ]);
-
-            if (typeof AndroidApp !== 'undefined') {
-                AndroidApp.shareText(text);
-            }
+            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
         }
 
+        // ====== Page-level search ======
         let searchTimeout;
         function handleSearch(query) {
             clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(() => {
-                performSearch(query);
-            }, 300);
+            searchTimeout = setTimeout(() => performSearch(query), 300);
         }
 
         function performSearch(query) {
             if (!query || query.trim() === '') {
-                if (currentState.page === 'books') {
-                    renderBooks(cachedData.books);
-                } else if (currentState.page === 'sections') {
-                    renderSections(cachedData.sections[currentState.bookId]);
-                } else if (currentState.page === 'hadith') {
-                    renderHadith(cachedData.hadith[currentState.bookId + '_' + currentState.sectionId]);
-                }
+                if (currentState.page === 'books') renderBooks(cachedData.books);
+                else if (currentState.page === 'sections') renderSections(cachedData.sections[currentState.bookId]);
+                else if (currentState.page === 'hadith') renderHadith(cachedData.hadith[currentState.bookId + '_' + currentState.sectionId]);
                 return;
             }
-
             const searchTerm = query.toLowerCase().trim();
-
             if (currentState.page === 'books' && cachedData.books) {
-                const filtered = cachedData.books.filter(book =>
+                renderBooks(cachedData.books.filter(book =>
                     (book.title_en || '').toLowerCase().includes(searchTerm) ||
                     (book.title_ar || '').includes(searchTerm) ||
                     (book.title || '').toLowerCase().includes(searchTerm)
-                );
-                renderBooks(filtered);
-
+                ));
             } else if (currentState.page === 'sections') {
                 const sections = cachedData.sections[currentState.bookId];
-                if (sections) {
-                    const filtered = sections.filter(section =>
-                        (section.title || '').toLowerCase().includes(searchTerm) ||
-                        (section.title_ar || '').includes(searchTerm)
-                    );
-                    renderSections(filtered);
-                }
-
+                if (sections) renderSections(sections.filter(section =>
+                    (section.title || '').toLowerCase().includes(searchTerm) ||
+                    (section.title_ar || '').includes(searchTerm)
+                ));
             } else if (currentState.page === 'hadith') {
                 const hadithList = cachedData.hadith[currentState.bookId + '_' + currentState.sectionId];
-                if (hadithList) {
-                    const filtered = hadithList.filter(hadith =>
-                        hadith.hadith_number.toString().includes(searchTerm) ||
-                        (hadith.title || '').toLowerCase().includes(searchTerm) ||
-                        (hadith.description || '').toLowerCase().includes(searchTerm) ||
-                        (hadith.description_ar || '').toLowerCase().includes(searchTerm)
-                    );
-                    renderHadith(filtered);
-                }
+                if (hadithList) renderHadith(hadithList.filter(hadith =>
+                    hadith.hadith_number.toString().includes(searchTerm) ||
+                    (hadith.title || '').toLowerCase().includes(searchTerm) ||
+                    (hadith.description || '').toLowerCase().includes(searchTerm) ||
+                    (hadith.description_ar || '').toLowerCase().includes(searchTerm)
+                ));
             }
         }
 
         function toggleSearch() {
             const searchContainer = document.getElementById('searchContainer');
             const searchInput = document.getElementById('searchInput');
-
             if (searchContainer.classList.contains('active')) {
                 searchContainer.classList.remove('active');
                 searchInput.value = '';
@@ -722,15 +751,321 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        function isSearchOpen() {
+            return document.getElementById('searchContainer').classList.contains('active');
+        }
+
+        function closeSearch() {
+            const searchContainer = document.getElementById('searchContainer');
+            const searchInput = document.getElementById('searchInput');
+            searchContainer.classList.remove('active');
+            searchInput.value = '';
+            handleSearch('');
+        }
+
         function handleBack() {
+            // প্রথমে searchbar চেক
+            if (isSearchOpen()) {
+                closeSearch();
+                return;
+            }
             if (currentState.page === 'hadith') {
                 loadSections(currentState.bookId, currentState.bookTitle);
             } else if (currentState.page === 'sections') {
                 loadBooks();
             } else {
+                // books page — finishActivity
                 if (typeof AndroidApp !== 'undefined') {
                     AndroidApp.finishActivity();
                 }
+            }
+        }
+
+        // ====== GLOBAL SEARCH POPUP ======
+        function openGlobalSearch() {
+            globalSearchActive = true;
+            document.getElementById('globalSearchOverlay').classList.add('active');
+            setTimeout(() => document.getElementById('globalSearchInput').focus(), 300);
+        }
+
+        function closeGlobalSearch() {
+            globalSearchActive = false;
+            globalSearchAbortFlag = true;
+            document.getElementById('globalSearchOverlay').classList.remove('active');
+            document.getElementById('globalSearchInput').value = '';
+            document.getElementById('globalSearchStatus').textContent = 'সার্চ করতে টাইপ করুন...';
+            document.getElementById('globalSearchResults').innerHTML =
+                '<div class="global-search-hint">🔍 সমস্ত হাদিস বই থেকে সার্চ করুন<br><br><small>হাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে</small></div>';
+        }
+
+        function handleGlobalSearch(query) {
+            clearTimeout(globalSearchTimeout);
+            if (!query || query.trim().length < 2) {
+                document.getElementById('globalSearchStatus').textContent = 'কমপক্ষে ২টি অক্ষর লিখুন...';
+                document.getElementById('globalSearchResults').innerHTML =
+                    '<div class="global-search-hint">🔍 সমস্ত হাদিস বই থেকে সার্চ করুন<br><br><small>হাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে</small></div>';
+                return;
+            }
+            document.getElementById('globalSearchStatus').textContent = '⏳ অনুসন্ধান করা হচ্ছে...';
+            globalSearchTimeout = setTimeout(() => performGlobalSearch(query.trim()), 400);
+        }
+
+        async function performGlobalSearch(query) {
+            globalSearchAbortFlag = false;
+            const resultsDiv = document.getElementById('globalSearchResults');
+            const statusDiv = document.getElementById('globalSearchStatus');
+
+            if (!allBooksData) {
+                statusDiv.textContent = '⚠️ বইয়ের তালিকা লোড হয়নি';
+                return;
+            }
+
+            resultsDiv.innerHTML = '<div class="gs-loading">🔍 সমস্ত বই অনুসন্ধান করা হচ্ছে...</div>';
+            const searchTerm = query.toLowerCase();
+            const allResults = [];
+            let booksSearched = 0;
+
+            for (const book of allBooksData) {
+                if (globalSearchAbortFlag) return;
+                try {
+                    // sections লোড
+                    const cacheKey = 'sections_' + book.id;
+                    let sections = cachedData.sections[book.id];
+                    if (!sections) {
+                        try {
+                            sections = await fetchData(
+                                'https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/' + book.id + '/title.json',
+                                cacheKey
+                            );
+                            cachedData.sections[book.id] = sections;
+                        } catch(e) { continue; }
+                    }
+
+                    for (const section of (sections || [])) {
+                        if (globalSearchAbortFlag) return;
+                        const dataKey = book.id + '_' + section.id;
+                        let hadithList = cachedData.hadith[dataKey];
+                        if (!hadithList) {
+                            try {
+                                hadithList = await fetchData(
+                                    'https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/' + book.id + '/hadith/' + section.id + '.json',
+                                    'hadith_' + book.id + '_' + section.id
+                                );
+                                cachedData.hadith[dataKey] = hadithList;
+                            } catch(e) { continue; }
+                        }
+
+                        const matched = (hadithList || []).filter(hadith =>
+                            (hadith.hadith_number || '').toString().includes(searchTerm) ||
+                            (hadith.title || '').toLowerCase().includes(searchTerm) ||
+                            (hadith.description || '').toLowerCase().includes(searchTerm) ||
+                            (hadith.description_ar || '').includes(searchTerm)
+                        );
+
+                        matched.forEach(h => {
+                            allResults.push({
+                                hadith: h,
+                                bookTitle: safeString(book.title, book.title_en || 'বই'),
+                                bookId: book.id,
+                                sectionTitle: safeString(section.title, 'অধ্যায়'),
+                                sectionId: section.id
+                            });
+                        });
+                    }
+                    booksSearched++;
+                    statusDiv.textContent = '🔍 ' + toBanglaNumber(booksSearched) + '/' + toBanglaNumber(allBooksData.length) + ' বই সার্চ হয়েছে — ' + toBanglaNumber(allResults.length) + ' টি ফলাফল';
+                } catch(e) { /* skip */ }
+            }
+
+            if (globalSearchAbortFlag) return;
+
+            if (allResults.length === 0) {
+                resultsDiv.innerHTML = '<div class="gs-no-result">😔 কোন হাদিস পাওয়া যায়নি</div>';
+                statusDiv.textContent = 'মোট ' + toBanglaNumber(booksSearched) + ' টি বই সার্চ হয়েছে — কোন ফলাফল নেই';
+            } else {
+                statusDiv.textContent = 'মোট ' + toBanglaNumber(allResults.length) + ' টি হাদিস পাওয়া গেছে';
+                renderGlobalResults(allResults);
+            }
+        }
+
+        function renderGlobalResults(results) {
+            const resultsDiv = document.getElementById('globalSearchResults');
+            resultsDiv.innerHTML = '';
+            results.forEach(item => {
+                const { hadith, bookTitle, bookId, sectionTitle, sectionId } = item;
+                const box = document.createElement('div');
+                box.className = 'gs-hadith-box';
+                box.innerHTML =
+                    '<div class="gs-hadith-header">' +
+                        '<span class="gs-hadith-number">হাদিস নং: ' + toBanglaNumber(hadith.hadith_number) + '</span>' +
+                        '<span class="gs-book-label">' + bookTitle + '</span>' +
+                        '<span class="gs-action-buttons">' +
+                            '<img src="file:///android_asset/images/copy.png" class="gs-action-icon" onclick="gsCopy(' + hadith.hadith_number + ',\'' + escapeJs(bookTitle) + '\',\'' + escapeJs(sectionTitle) + '\')" alt="Copy">' +
+                            '<img src="file:///android_asset/images/share.png" class="gs-action-icon" onclick="gsShare(' + hadith.hadith_number + ',\'' + escapeJs(bookTitle) + '\',\'' + escapeJs(sectionTitle) + '\')" alt="Share">' +
+                        '</span>' +
+                    '</div>' +
+                    (hadith.title ? '<div class="gs-hadith-title">' + hadith.title + '</div>' : '') +
+                    (hadith.description_ar ? '<div class="gs-hadith-description-ar">' + hadith.description_ar + '</div>' : '') +
+                    (hadith.description ? '<div class="gs-hadith-description">' + hadith.description + '</div>' : '');
+                resultsDiv.appendChild(box);
+            });
+        }
+
+        function escapeJs(str) {
+            return (str || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+        }
+
+        function gsGetHadithFromCache(hadithNumber, bookId, sectionId) {
+            const dataKey = bookId + '_' + sectionId;
+            const list = cachedData.hadith[dataKey];
+            if (!list) return null;
+            return list.find(h => h.hadith_number == hadithNumber) || null;
+        }
+
+        function gsFindInAllCache(hadithNumber) {
+            for (const key in cachedData.hadith) {
+                const found = cachedData.hadith[key].find(h => h.hadith_number == hadithNumber);
+                if (found) return found;
+            }
+            return null;
+        }
+
+        function gsGetTextFromResult(hadithNumber, bookTitle, sectionTitle) {
+            const hadith = gsFindInAllCache(hadithNumber);
+            if (!hadith) return '';
+            return buildText([
+                bookTitle, sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '', hadith.description_ar || '', hadith.description || ''
+            ]);
+        }
+
+        function gsShare(hadithNumber, bookTitle, sectionTitle) {
+            const hadith = gsFindInAllCache(hadithNumber);
+            if (!hadith) return;
+            const text = buildText([
+                bookTitle, sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '', hadith.description_ar || '', hadith.description || '',
+                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
+            ]);
+            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
+        }
+
+        function gsShare(hadithNumber, bookTitle, sectionTitle) {
+            const hadith = gsFindInAllCache(hadithNumber);
+            if (!hadith) return;
+            const text = buildText([
+                bookTitle, sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '', hadith.description_ar || '', hadith.description || '',
+                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
+            ]);
+            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
+        }
+
+        function gsShare(hadithNumber, bookTitle, sectionTitle) {
+            const hadith = gsFindInAllCache(hadithNumber);
+            if (!hadith) return;
+            const text = buildText([
+                bookTitle, sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '', hadith.description_ar || '', hadith.description || '',
+                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
+            ]);
+            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
+        }
+
+        function gsShare(hadithNumber, bookTitle, sectionTitle) {
+            const hadith = gsFindInAllCache(hadithNumber);
+            if (!hadith) return;
+            const text = buildText([
+                bookTitle, sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '', hadith.description_ar || '', hadith.description || '',
+                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
+            ]);
+            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
+        }
+
+        function gsShare(hadithNumber, bookTitle, sectionTitle) {
+            const hadith = gsFindInAllCache(hadithNumber);
+            if (!hadith) return;
+            const text = buildText([
+                bookTitle, sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '', hadith.description_ar || '', hadith.description || '',
+                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
+            ]);
+            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
+        }
+
+        function gsShare(hadithNumber, bookTitle, sectionTitle) {
+            const hadith = gsFindInAllCache(hadithNumber);
+            if (!hadith) return;
+            const text = buildText([
+                bookTitle, sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '', hadith.description_ar || '', hadith.description || '',
+                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
+            ]);
+            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
+        }
+
+        function gsShare(hadithNumber, bookTitle, sectionTitle) {
+            const hadith = gsFindInAllCache(hadithNumber);
+            if (!hadith) return;
+            const text = buildText([
+                bookTitle, sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '', hadith.description_ar || '', hadith.description || '',
+                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
+            ]);
+            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
+        }
+
+        function gsShare(hadithNumber, bookTitle, sectionTitle) {
+            const hadith = gsFindInAllCache(hadithNumber);
+            if (!hadith) return;
+            const text = buildText([
+                bookTitle, sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '', hadith.description_ar || '', hadith.description || '',
+                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
+            ]);
+            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
+        }
+
+        function gsShare(hadithNumber, bookTitle, sectionTitle) {
+            const hadith = gsFindInAllCache(hadithNumber);
+            if (!hadith) return;
+            const text = buildText([
+                bookTitle, sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '', hadith.description_ar || '', hadith.description || '',
+                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
+            ]);
+            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
+        }
+
+        function gsShare(hadithNumber, bookTitle, sectionTitle) {
+            const hadith = gsFindInAllCache(hadithNumber);
+            if (!hadith) return;
+            const text = buildText([
+                bookTitle, sectionTitle,
+                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
+                hadith.title || '', hadith.description_ar || '', hadith.description || '',
+                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
+            ]);
+            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
+        }
+
+        function gsCopy(hadithNumber, bookTitle, sectionTitle) {
+            const text = gsGetTextFromResult(hadithNumber, bookTitle, sectionTitle);
+            if (!text) return;
+            if (typeof AndroidApp !== 'undefined') {
+                AndroidApp.copyToClipboard(text);
+                AndroidApp.showToast('কপি করা হয়েছে!');
             }
         }
 
@@ -747,23 +1082,16 @@ class MainActivity : AppCompatActivity() {
 
         @android.webkit.JavascriptInterface
         fun finishActivity() {
-            runOnUiThread {
-                finish()
-            }
+            runOnUiThread { finish() }
         }
 
         @android.webkit.JavascriptInterface
         fun getCachedData(key: String): String {
             return try {
                 val cacheFile = File(filesDir, "$cacheDirName/${getCacheFileName(key)}")
-                if (cacheFile.exists()) {
-                    cacheFile.readText()
-                } else {
-                    ""
-                }
+                if (cacheFile.exists()) cacheFile.readText() else ""
             } catch (e: Exception) {
-                e.printStackTrace()
-                ""
+                e.printStackTrace(); ""
             }
         }
 
@@ -771,28 +1099,20 @@ class MainActivity : AppCompatActivity() {
         fun cacheData(key: String, data: String) {
             try {
                 val cacheDir = File(filesDir, cacheDirName)
-                if (!cacheDir.exists()) {
-                    cacheDir.mkdirs()
-                }
-                val cacheFile = File(cacheDir, getCacheFileName(key))
-                cacheFile.writeText(data)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+                if (!cacheDir.exists()) cacheDir.mkdirs()
+                File(cacheDir, getCacheFileName(key)).writeText(data)
+            } catch (e: Exception) { e.printStackTrace() }
         }
 
         @android.webkit.JavascriptInterface
         fun showToast(message: String) {
-            runOnUiThread {
-                Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
-            }
+            runOnUiThread { Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show() }
         }
 
         @android.webkit.JavascriptInterface
         fun copyToClipboard(text: String) {
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            val clip = android.content.ClipData.newPlainText("হাদিস", text)
-            clipboard.setPrimaryClip(clip)
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("হাদিস", text))
         }
 
         @android.webkit.JavascriptInterface
@@ -803,52 +1123,58 @@ class MainActivity : AppCompatActivity() {
                     putExtra(android.content.Intent.EXTRA_TEXT, text)
                     type = "text/plain"
                 }
-                val shareIntent = android.content.Intent.createChooser(sendIntent, "শেয়ার করুন")
-                startActivity(shareIntent)
+                startActivity(android.content.Intent.createChooser(sendIntent, "শেয়ার করুন"))
             }
         }
 
         private fun getCacheFileName(key: String): String {
             val md = MessageDigest.getInstance("MD5")
-            val digest = md.digest(key.toByteArray())
-            return digest.joinToString("") { "%02x".format(it) } + ".json"
+            return md.digest(key.toByteArray()).joinToString("") { "%02x".format(it) } + ".json"
         }
     }
 
     private fun isNetworkAvailable(): Boolean {
-        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = connectivityManager.activeNetwork ?: return false
-        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = cm.activeNetwork ?: return false
+        val capabilities = cm.getNetworkCapabilities(network) ?: return false
         return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
     private fun showOfflineMessage() {
-        webView.evaluateJavascript("""
-            document.getElementById('offlineIndicator').style.display = 'block';
-        """.trimIndent(), null)
+        webView.evaluateJavascript(
+            "document.getElementById('offlineIndicator').style.display = 'block';", null
+        )
     }
 
     override fun onBackPressed() {
         webView.evaluateJavascript("""
             (function() {
-                if (typeof currentState !== 'undefined') {
-                    return JSON.stringify({
-                        page: currentState.page,
-                        canGoBack: currentState.page !== 'books'
-                    });
+                if (typeof globalSearchActive !== 'undefined' && globalSearchActive) {
+                    return JSON.stringify({action: 'closeGlobalSearch'});
                 }
-                return JSON.stringify({page: 'unknown', canGoBack: false});
+                if (typeof isSearchOpen === 'function' && isSearchOpen()) {
+                    return JSON.stringify({action: 'closeSearch'});
+                }
+                if (typeof currentState !== 'undefined') {
+                    return JSON.stringify({action: 'navigate', page: currentState.page});
+                }
+                return JSON.stringify({action: 'finish'});
             })();
         """.trimIndent()) { result ->
             try {
-                val cleanResult = result.replace("\\\"", "\"").trim('"')
-                if (cleanResult.contains("\"page\":\"books\"")) {
-                    super.onBackPressed()
-                } else if (cleanResult.contains("\"page\":\"sections\"") || cleanResult.contains("\"page\":\"hadith\"")) {
-                    webView.evaluateJavascript("handleBack()", null)
-                } else {
-                    super.onBackPressed()
+                val clean = result.replace("\\\"", "\"").trim('"')
+                when {
+                    clean.contains("\"action\":\"closeGlobalSearch\"") ->
+                        webView.evaluateJavascript("closeGlobalSearch()", null)
+                    clean.contains("\"action\":\"closeSearch\"") ->
+                        webView.evaluateJavascript("closeSearch()", null)
+                    clean.contains("\"page\":\"books\"") ->
+                        super.onBackPressed()
+                    clean.contains("\"page\":\"sections\"") || clean.contains("\"page\":\"hadith\"") ->
+                        webView.evaluateJavascript("handleBack()", null)
+                    else ->
+                        super.onBackPressed()
                 }
             } catch (e: Exception) {
                 super.onBackPressed()
