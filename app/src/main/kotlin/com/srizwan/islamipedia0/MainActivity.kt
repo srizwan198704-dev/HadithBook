@@ -133,10 +133,6 @@ class MainActivity : AppCompatActivity() {
     private var globalSearchRunnable: Runnable? = null
     private val marqueeHandler = Handler(Looper.getMainLooper())
 
-    // ─────────────────────────────────────────────────────────────
-    // Tracks last full (unfiltered) list for each state
-    // so search can always filter from the original data
-    // ─────────────────────────────────────────────────────────────
     private var currentBooks: List<BookItem> = emptyList()
     private var currentSections: List<SectionItem> = emptyList()
     private var currentHadithList: List<HadithItem> = emptyList()
@@ -494,7 +490,6 @@ class MainActivity : AppCompatActivity() {
     private fun loadBooks() {
         currentState = PageState.Books
         updateToolbar("হাদিস সমগ্র")
-        // Reset search when navigating
         closeSearchSilently()
 
         val memBooks = HadithCache.books
@@ -543,7 +538,6 @@ class MainActivity : AppCompatActivity() {
     private fun loadSections(bookId: Int, bookTitle: String) {
         currentState = PageState.Sections(bookId, bookTitle)
         updateToolbar(bookTitle)
-        // Reset search when navigating
         closeSearchSilently()
 
         val memSections = HadithCache.sections[bookId]
@@ -596,7 +590,6 @@ class MainActivity : AppCompatActivity() {
     private fun loadHadith(bookId: Int, sectionId: Int, bookTitle: String, sectionTitle: String) {
         currentState = PageState.Hadith(bookId, sectionId, bookTitle, sectionTitle)
         updateToolbar(sectionTitle)
-        // Reset search when navigating
         closeSearchSilently()
         val key = "${bookId}_$sectionId"
 
@@ -649,34 +642,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Page-level Search  ← FIXED
+    // Page-level Search
     // ─────────────────────────────────────────────────────────────
-
     private fun toggleSearch() {
-        if (isSearchOpen) {
-            closeSearch()
-        } else {
+        if (isSearchOpen) closeSearch() else {
             isSearchOpen = true
             searchContainer.visibility = View.VISIBLE
             searchInput.requestFocus()
         }
     }
 
-    /** Closes search bar AND resets the list — called by the user via back/toggle */
     private fun closeSearch() {
         isSearchOpen = false
         searchContainer.visibility = View.GONE
-        // Suppress the TextWatcher while clearing
-        searchInput.removeTextChangedListener(null)
         searchInput.setText("")
-        // Restore full list
         restoreFullList()
     }
 
-    /**
-     * Silently hides the search bar (without triggering a list-restore),
-     * used when navigating between pages.
-     */
     private fun closeSearchSilently() {
         isSearchOpen = false
         searchHandler.removeCallbacks(searchRunnable ?: return)
@@ -684,7 +666,6 @@ class MainActivity : AppCompatActivity() {
         searchInput.setText("")
     }
 
-    /** Re-display the full (unfiltered) data for the current state */
     private fun restoreFullList() {
         showContent()
         when (val s = currentState) {
@@ -710,39 +691,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun performSearch(query: String) {
-        // Always make RecyclerView visible while searching/restoring
         showContent()
-
         val term = query.lowercase().trim()
-
-        if (term.isBlank()) {
-            restoreFullList()
-            return
-        }
+        if (term.isBlank()) { restoreFullList(); return }
 
         when (val s = currentState) {
             is PageState.Books -> {
                 val filtered = currentBooks.filter { book ->
-                    book.titleEn.lowercase().contains(term) ||
-                    book.titleAr.contains(term)
+                    book.titleEn.lowercase().contains(term) || book.titleAr.contains(term)
                 }
-                recyclerView.adapter = BookAdapter(filtered) { book ->
-                    loadSections(book.id, book.titleEn)
-                }
+                recyclerView.adapter = BookAdapter(filtered) { book -> loadSections(book.id, book.titleEn) }
                 if (filtered.isEmpty()) showEmptySearchResult()
             }
-
             is PageState.Sections -> {
                 val filtered = currentSections.filter { section ->
-                    section.title.lowercase().contains(term) ||
-                    section.titleAr.contains(term)
+                    section.title.lowercase().contains(term) || section.titleAr.contains(term)
                 }
                 recyclerView.adapter = SectionAdapter(filtered) { section ->
                     loadHadith(s.bookId, section.id, s.bookTitle, section.title)
                 }
                 if (filtered.isEmpty()) showEmptySearchResult()
             }
-
             is PageState.Hadith -> {
                 val filtered = currentHadithList.filter { h ->
                     h.hadithNumber.toString().contains(term) ||
@@ -761,9 +730,7 @@ class MainActivity : AppCompatActivity() {
         recyclerView.scrollToPosition(0)
     }
 
-    /** Shows a "no results" message inside the status overlay without hiding the recycler completely */
     private fun showEmptySearchResult() {
-        // Keep recycler visible (it has 0 items) but also show a subtle toast
         Toast.makeText(this, "কোনো ফলাফল পাওয়া যায়নি", Toast.LENGTH_SHORT).show()
     }
 
@@ -940,7 +907,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Book Adapter
+    // Book Adapter  ← বাংলা সংখ্যা যুক্ত শিরোনাম + null-hide
     // ─────────────────────────────────────────────────────────────
     inner class BookAdapter(
         private val items: List<BookItem>,
@@ -961,52 +928,90 @@ class MainActivity : AppCompatActivity() {
         )
 
         override fun onBindViewHolder(holder: VH, position: Int) {
-            val book = items[position]; holder.card.removeAllViews()
+            val book = items[position]
+            holder.card.removeAllViews()
             holder.card.setOnClickListener { onClick(book) }
 
-            holder.card.addView(TextView(this@MainActivity).apply {
-                text = book.titleEn; textSize = 17f
-                setTextColor(Color.parseColor("#01837A")); typeface = getBengaliTypeface()
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            })
+            // ── বাংলা ক্রমিক নম্বর সহ বইয়ের শিরোনাম ──────────────
+            // শুধুমাত্র titleEn (বা titleAr) যদি blank না হয় তাহলেই দেখাবে
+            val displayTitle = book.titleEn.ifBlank { book.titleAr }
+            if (displayTitle.isNotBlank()) {
+                holder.card.addView(TextView(this@MainActivity).apply {
+                    // format: "(১). বুখারী শরীফ"
+                    text = "(${toBangla(position + 1)}). $displayTitle"
+                    textSize = 17f
+                    setTextColor(Color.parseColor("#01837A"))
+                    typeface = getBengaliTypeface()
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                })
+            }
+
+            // ── আরবি শিরোনাম (null/blank হলে hide) ──────────────────
             if (book.titleAr.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
-                    text = book.titleAr; textSize = 18f
-                    setTextColor(Color.parseColor("#333333")); typeface = getArabicTypeface()
+                    text = book.titleAr
+                    textSize = 18f
+                    setTextColor(Color.parseColor("#333333"))
+                    typeface = getArabicTypeface()
                     gravity = Gravity.END
                     layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(10); bottomMargin = dp(10) }
                 })
             }
+
+            // ── Divider ───────────────────────────────────────────────
             holder.card.addView(View(this@MainActivity).apply {
                 setBackgroundColor(Color.parseColor("#DDDDDD"))
-                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
-            })
-            val meta = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(8) }
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1)
+                )
+            })
+
+            // ── Meta row (অধ্যায় ও হাদিস সংখ্যা — শুধু > 0 হলেই দেখাবে) ──
+            val hasSectionCount = book.totalSection > 0
+            val hasHadithCount  = book.totalHadith > 0
+
+            if (hasSectionCount || hasHadithCount) {
+                val meta = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(8) }
+                }
+                if (hasSectionCount) {
+                    meta.addView(TextView(this@MainActivity).apply {
+                        text = "📚 ${toBangla(book.totalSection)} টি অধ্যায়"
+                        textSize = 13f
+                        setTextColor(Color.parseColor("#666666"))
+                        typeface = getBengaliTypeface()
+                        layoutParams = LinearLayout.LayoutParams(
+                            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                        )
+                    })
+                }
+                if (hasHadithCount) {
+                    meta.addView(TextView(this@MainActivity).apply {
+                        text = "📖 ${toBangla(book.totalHadith)} টি হাদিস"
+                        textSize = 13f
+                        setTextColor(Color.parseColor("#666666"))
+                        typeface = getBengaliTypeface()
+                    })
+                }
+                holder.card.addView(meta)
             }
-            meta.addView(TextView(this@MainActivity).apply {
-                text = "📚 ${toBangla(book.totalSection)} টি অধ্যায়"; textSize = 13f
-                setTextColor(Color.parseColor("#666666")); typeface = getBengaliTypeface()
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            })
-            meta.addView(TextView(this@MainActivity).apply {
-                text = "📖 ${toBangla(book.totalHadith)} টি হাদিস"; textSize = 13f
-                setTextColor(Color.parseColor("#666666")); typeface = getBengaliTypeface()
-            })
-            holder.card.addView(meta)
         }
 
         override fun getItemCount() = items.size
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Section Adapter
+    // Section Adapter  ← null/blank value হলে hide
     // ─────────────────────────────────────────────────────────────
     inner class SectionAdapter(
         private val items: List<SectionItem>,
@@ -1027,54 +1032,87 @@ class MainActivity : AppCompatActivity() {
         )
 
         override fun onBindViewHolder(holder: VH, position: Int) {
-            val section = items[position]; holder.card.removeAllViews()
+            val section = items[position]
+            holder.card.removeAllViews()
             holder.card.setOnClickListener { onClick(section) }
 
-            holder.card.addView(TextView(this@MainActivity).apply {
-                text = section.title; textSize = 17f
-                setTextColor(Color.parseColor("#01837A")); typeface = getBengaliTypeface()
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            })
+            // ── বাংলা শিরোনাম (blank হলে hide) ───────────────────────
+            if (section.title.isNotBlank()) {
+                holder.card.addView(TextView(this@MainActivity).apply {
+                    text = section.title
+                    textSize = 17f
+                    setTextColor(Color.parseColor("#01837A"))
+                    typeface = getBengaliTypeface()
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                })
+            }
+
+            // ── আরবি শিরোনাম (blank হলে hide) ────────────────────────
             if (section.titleAr.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
-                    text = section.titleAr; textSize = 18f
-                    setTextColor(Color.parseColor("#333333")); typeface = getArabicTypeface()
+                    text = section.titleAr
+                    textSize = 18f
+                    setTextColor(Color.parseColor("#333333"))
+                    typeface = getArabicTypeface()
                     gravity = Gravity.END
                     layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(10); bottomMargin = dp(10) }
                 })
             }
+
+            // ── Divider ───────────────────────────────────────────────
             holder.card.addView(View(this@MainActivity).apply {
                 setBackgroundColor(Color.parseColor("#DDDDDD"))
-                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
-            })
-            val meta = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(8) }
-            }
-            meta.addView(TextView(this@MainActivity).apply {
-                text = "📖 মোট ${toBangla(section.totalHadith)} টি হাদিস"; textSize = 13f
-                setTextColor(Color.parseColor("#666666")); typeface = getBengaliTypeface()
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1)
+                )
             })
-            if (section.rangeStart > 0 && section.rangeEnd > 0) {
-                meta.addView(TextView(this@MainActivity).apply {
-                    text = "🔢 ব্যাপ্তি: ${toBangla(section.rangeStart)}-${toBangla(section.rangeEnd)}"
-                    textSize = 13f; setTextColor(Color.parseColor("#666666")); typeface = getBengaliTypeface()
-                })
+
+            // ── Meta row ──────────────────────────────────────────────
+            val hasHadithCount = section.totalHadith > 0
+            val hasRange = section.rangeStart > 0 && section.rangeEnd > 0
+
+            if (hasHadithCount || hasRange) {
+                val meta = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(8) }
+                }
+                if (hasHadithCount) {
+                    meta.addView(TextView(this@MainActivity).apply {
+                        text = "📖 মোট ${toBangla(section.totalHadith)} টি হাদিস"
+                        textSize = 13f
+                        setTextColor(Color.parseColor("#666666"))
+                        typeface = getBengaliTypeface()
+                        layoutParams = LinearLayout.LayoutParams(
+                            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                        )
+                    })
+                }
+                if (hasRange) {
+                    meta.addView(TextView(this@MainActivity).apply {
+                        text = "🔢 ব্যাপ্তি: ${toBangla(section.rangeStart)}-${toBangla(section.rangeEnd)}"
+                        textSize = 13f
+                        setTextColor(Color.parseColor("#666666"))
+                        typeface = getBengaliTypeface()
+                    })
+                }
+                holder.card.addView(meta)
             }
-            holder.card.addView(meta)
         }
 
         override fun getItemCount() = items.size
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Hadith Adapter
+    // Hadith Adapter  ← null/blank value হলে hide
     // ─────────────────────────────────────────────────────────────
     inner class HadithAdapter(
         private val items: List<HadithItem>,
@@ -1096,57 +1134,84 @@ class MainActivity : AppCompatActivity() {
         )
 
         override fun onBindViewHolder(holder: VH, position: Int) {
-            val hadith = items[position]; holder.card.removeAllViews()
+            val hadith = items[position]
+            holder.card.removeAllViews()
 
+            // ── Header row: হাদিস নং + copy + share ──────────────────
             val headerRow = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
                 layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
             }
-            headerRow.addView(TextView(this@MainActivity).apply {
-                text = "হাদিস নং: ${toBangla(hadith.hadithNumber)}"; textSize = 13f
-                setTextColor(Color.WHITE); typeface = getBengaliTypeface()
-                background = createRoundedSolid(Color.parseColor("#01837A"), dp(20))
-                setPadding(dp(12), dp(5), dp(12), dp(5))
-            })
+            // হাদিস নম্বর badge (hadithNumber == 0 হলে hide)
+            if (hadith.hadithNumber > 0) {
+                headerRow.addView(TextView(this@MainActivity).apply {
+                    text = "হাদিস নং: ${toBangla(hadith.hadithNumber)}"
+                    textSize = 13f
+                    setTextColor(Color.WHITE)
+                    typeface = getBengaliTypeface()
+                    background = createRoundedSolid(Color.parseColor("#01837A"), dp(20))
+                    setPadding(dp(12), dp(5), dp(12), dp(5))
+                })
+            }
             headerRow.addView(View(this@MainActivity).apply {
-                layoutParams = LinearLayout.LayoutParams(0, 0, 1f) })
+                layoutParams = LinearLayout.LayoutParams(0, 0, 1f)
+            })
             headerRow.addView(ImageView(this@MainActivity).apply {
-                setImageResource(R.drawable.copy); setColorFilter(Color.parseColor("#01837A"))
+                setImageResource(R.drawable.copy)
+                setColorFilter(Color.parseColor("#01837A"))
                 layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(10) }
                 setOnClickListener { onCopy(hadith) }
             })
             headerRow.addView(ImageView(this@MainActivity).apply {
-                setImageResource(R.drawable.share); setColorFilter(Color.parseColor("#01837A"))
+                setImageResource(R.drawable.share)
+                setColorFilter(Color.parseColor("#01837A"))
                 layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
                 setOnClickListener { onShare(hadith) }
             })
             holder.card.addView(headerRow)
 
+            // ── শিরোনাম (blank হলে hide) ──────────────────────────────
             if (hadith.title.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
-                    textSize = 17f; setTextColor(Color.parseColor("#01837A")); typeface = getBengaliTypeface()
+                    textSize = 18f
+                    setTextColor(Color.parseColor("#01837A"))
+                    typeface = getBengaliTypeface()
                     layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(10) }
                     setSmartText(hadith.title)
                 })
             }
+
+            // ── আরবি বিবরণ (blank হলে hide) ──────────────────────────
             if (hadith.descriptionAr.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
-                    textSize = 20f; setTextColor(Color.parseColor("#333333")); typeface = getArabicTypeface()
+                    textSize = 20f
+                    setTextColor(Color.parseColor("#333333"))
+                    typeface = getArabicTypeface()
                     gravity = Gravity.END
                     layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(12); bottomMargin = dp(6) }
                     setSmartText(hadith.descriptionAr)
                 })
             }
+
+            // ── বাংলা বিবরণ (blank হলে hide) ─────────────────────────
             if (hadith.description.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
-                    textSize = 15f; setTextColor(Color.parseColor("#444444")); typeface = getBengaliTypeface()
+                    textSize = 18f
+                    setTextColor(Color.parseColor("#444444"))
+                    typeface = getBengaliTypeface()
                     layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(8) }
                     setSmartText(hadith.description)
                 })
@@ -1157,7 +1222,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Global Search Adapter
+    // Global Search Adapter  ← null/blank value হলে hide
     // ─────────────────────────────────────────────────────────────
     data class GlobalSearchResult(
         val hadith: HadithItem, val bookTitle: String, val bookId: Int,
@@ -1184,68 +1249,103 @@ class MainActivity : AppCompatActivity() {
         )
 
         override fun onBindViewHolder(holder: VH, position: Int) {
-            val result = items[position]; val hadith = result.hadith
+            val result = items[position]
+            val hadith = result.hadith
             holder.card.removeAllViews()
 
+            // ── Header row ────────────────────────────────────────────
             val headerRow = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
                 layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
             }
-            headerRow.addView(TextView(this@MainActivity).apply {
-                text = "হাদিস নং: ${toBangla(hadith.hadithNumber)}"; textSize = 12f
-                setTextColor(Color.WHITE); typeface = getBengaliTypeface()
-                background = createRoundedSolid(Color.parseColor("#01837A"), dp(20))
-                setPadding(dp(10), dp(4), dp(10), dp(4))
-            })
-            headerRow.addView(TextView(this@MainActivity).apply {
-                text = result.bookTitle; textSize = 11f
-                setTextColor(Color.parseColor("#01837A")); typeface = getBengaliTypeface()
-                background = createRoundedBg(Color.parseColor("#E8F8F7"), Color.parseColor("#01837A"), dp(1), dp(12))
-                setPadding(dp(8), dp(3), dp(8), dp(3))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { marginStart = dp(8) }
-                maxWidth = dp(130); isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END
-            })
+            if (hadith.hadithNumber > 0) {
+                headerRow.addView(TextView(this@MainActivity).apply {
+                    text = "হাদিস নং: ${toBangla(hadith.hadithNumber)}"
+                    textSize = 12f
+                    setTextColor(Color.WHITE)
+                    typeface = getBengaliTypeface()
+                    background = createRoundedSolid(Color.parseColor("#01837A"), dp(20))
+                    setPadding(dp(10), dp(4), dp(10), dp(4))
+                })
+            }
+            if (result.bookTitle.isNotBlank()) {
+                headerRow.addView(TextView(this@MainActivity).apply {
+                    text = result.bookTitle
+                    textSize = 11f
+                    setTextColor(Color.parseColor("#01837A"))
+                    typeface = getBengaliTypeface()
+                    background = createRoundedBg(
+                        Color.parseColor("#E8F8F7"), Color.parseColor("#01837A"), dp(1), dp(12)
+                    )
+                    setPadding(dp(8), dp(3), dp(8), dp(3))
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { marginStart = dp(8) }
+                    maxWidth = dp(130)
+                    isSingleLine = true
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+            }
             headerRow.addView(View(this@MainActivity).apply {
-                layoutParams = LinearLayout.LayoutParams(0, 0, 1f) })
+                layoutParams = LinearLayout.LayoutParams(0, 0, 1f)
+            })
             headerRow.addView(ImageView(this@MainActivity).apply {
-                setImageResource(R.drawable.copy); setColorFilter(Color.parseColor("#01837A"))
+                setImageResource(R.drawable.copy)
+                setColorFilter(Color.parseColor("#01837A"))
                 layoutParams = LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(8) }
                 setOnClickListener { onCopy(result) }
             })
             headerRow.addView(ImageView(this@MainActivity).apply {
-                setImageResource(R.drawable.share); setColorFilter(Color.parseColor("#01837A"))
+                setImageResource(R.drawable.share)
+                setColorFilter(Color.parseColor("#01837A"))
                 layoutParams = LinearLayout.LayoutParams(dp(22), dp(22))
                 setOnClickListener { onShare(result) }
             })
             holder.card.addView(headerRow)
 
+            // ── শিরোনাম (blank হলে hide) ──────────────────────────────
             if (hadith.title.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
-                    textSize = 15f; setTextColor(Color.parseColor("#01837A")); typeface = getBengaliTypeface()
+                    textSize = 15f
+                    setTextColor(Color.parseColor("#01837A"))
+                    typeface = getBengaliTypeface()
                     layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(8) }
                     setSmartText(hadith.title)
                 })
             }
+
+            // ── আরবি বিবরণ (blank হলে hide) ──────────────────────────
             if (hadith.descriptionAr.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
-                    textSize = 18f; setTextColor(Color.parseColor("#333333")); typeface = getArabicTypeface()
+                    textSize = 18f
+                    setTextColor(Color.parseColor("#333333"))
+                    typeface = getArabicTypeface()
                     gravity = Gravity.END
                     layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(10); bottomMargin = dp(6) }
                     setSmartText(hadith.descriptionAr)
                 })
             }
+
+            // ── বাংলা বিবরণ (blank হলে hide) ─────────────────────────
             if (hadith.description.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
-                    textSize = 14f; setTextColor(Color.parseColor("#444444")); typeface = getBengaliTypeface()
+                    textSize = 14f
+                    setTextColor(Color.parseColor("#444444"))
+                    typeface = getBengaliTypeface()
                     layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(8) }
                     setSmartText(hadith.description)
                 })
