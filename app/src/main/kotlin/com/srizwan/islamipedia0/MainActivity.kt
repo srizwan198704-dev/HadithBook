@@ -667,12 +667,17 @@ class MainActivity : AppCompatActivity() {
 
         val memBooks = HadithCache.books
         if (memBooks != null) {
+            // মেমরিতে থাকলেও কন্টেন্ট আসার আগে লোডিং দেখাতে হবে
             currentBooks = memBooks
             filteredBooks = memBooks
-            showContent()
-            recyclerView.adapter = BookAdapter(filteredBooks) { book -> loadSections(book.id, book.titleEn) }
-            attachKeyboardHideOnTouch()
-            restoreScrollPosition()
+            showLoading()  // ✅ এখন লোডিং দেখাবে
+            // UI থ্রেডে অল্প সময় পর কন্টেন্ট দেখানো
+            Handler(Looper.getMainLooper()).postDelayed({
+                showContent()
+                recyclerView.adapter = BookAdapter(filteredBooks) { book -> loadSections(book.id, book.titleEn) }
+                attachKeyboardHideOnTouch()
+                restoreScrollPosition()
+            }, 50) // একটু ডেলেই যাতে লোডিংটা চোখে পড়ে
             return
         }
 
@@ -726,12 +731,15 @@ class MainActivity : AppCompatActivity() {
         if (memSections != null) {
             currentSections = memSections
             filteredSections = memSections
-            showContent()
-            recyclerView.adapter = SectionAdapter(filteredSections) { section ->
-                loadHadith(bookId, section.id, bookTitle, section.title)
-            }
-            attachKeyboardHideOnTouch()
-            restoreScrollPosition()
+            showLoading()  // ✅ এখন লোডিং দেখাবে
+            Handler(Looper.getMainLooper()).postDelayed({
+                showContent()
+                recyclerView.adapter = SectionAdapter(filteredSections) { section ->
+                    loadHadith(bookId, section.id, bookTitle, section.title)
+                }
+                attachKeyboardHideOnTouch()
+                restoreScrollPosition()
+            }, 50)
             return
         }
 
@@ -789,14 +797,17 @@ class MainActivity : AppCompatActivity() {
         if (memHadith != null) {
             currentHadithList = memHadith
             filteredHadith = memHadith
-            showContent()
-            recyclerView.adapter = HadithAdapter(
-                filteredHadith,
-                onCopy  = { h -> copyHadith(h, bookTitle, sectionTitle) },
-                onShare = { h -> shareHadith(h, bookTitle, sectionTitle) }
-            )
-            attachKeyboardHideOnTouch()
-            restoreScrollPosition()
+            showLoading()  // ✅ এখন লোডিং দেখাবে
+            Handler(Looper.getMainLooper()).postDelayed({
+                showContent()
+                recyclerView.adapter = HadithAdapter(
+                    filteredHadith,
+                    onCopy  = { h -> copyHadith(h, bookTitle, sectionTitle) },
+                    onShare = { h -> shareHadith(h, bookTitle, sectionTitle) }
+                )
+                attachKeyboardHideOnTouch()
+                restoreScrollPosition()
+            }, 50)
             return
         }
 
