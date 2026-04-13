@@ -60,7 +60,7 @@ data class HadithItem(
 )
 
 // ─────────────────────────────────────────────────────────────────
-// Page State
+// Page State with scroll position
 // ─────────────────────────────────────────────────────────────────
 sealed class PageState {
     object Books : PageState()
@@ -71,6 +71,15 @@ sealed class PageState {
         val bookTitle: String,
         val sectionTitle: String
     ) : PageState()
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Scroll position holder
+// ─────────────────────────────────────────────────────────────────
+object ScrollState {
+    var booksPosition: Int = 0
+    val sectionsPositions = mutableMapOf<Int, Int>()
+    val hadithPositions = mutableMapOf<String, Int>()
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -101,8 +110,6 @@ fun String.containsHtml(): Boolean = contains(Regex("<[a-zA-Z][^>]*>"))
 
 // ─────────────────────────────────────────────────────────────────
 // JSON null-safe helper
-// JSONObject.optString() returns the literal string "null" when the
-// JSON value is null.  This extension always returns "" in that case.
 // ─────────────────────────────────────────────────────────────────
 fun JSONObject.safeString(key: String, fallback: String = ""): String {
     if (isNull(key)) return fallback
@@ -475,8 +482,43 @@ class MainActivity : AppCompatActivity() {
         return num.toString().map { if (it.isDigit()) d[it - '0'] else it }.joinToString("")
     }
 
+    // ── Save & Restore Scroll Position ────────────────────────────
+    private fun saveScrollPosition() {
+        val layoutManager = recyclerView.layoutManager as LinearLayoutManager
+        val position = layoutManager.findFirstVisibleItemPosition()
+        when (currentState) {
+            is PageState.Books -> ScrollState.booksPosition = position
+            is PageState.Sections -> {
+                val state = currentState as PageState.Sections
+                ScrollState.sectionsPositions[state.bookId] = position
+            }
+            is PageState.Hadith -> {
+                val state = currentState as PageState.Hadith
+                ScrollState.hadithPositions["${state.bookId}_${state.sectionId}"] = position
+            }
+        }
+    }
+
+    private fun restoreScrollPosition() {
+        val position = when (currentState) {
+            is PageState.Books -> ScrollState.booksPosition
+            is PageState.Sections -> {
+                val state = currentState as PageState.Sections
+                ScrollState.sectionsPositions[state.bookId] ?: 0
+            }
+            is PageState.Hadith -> {
+                val state = currentState as PageState.Hadith
+                ScrollState.hadithPositions["${state.bookId}_${state.sectionId}"] ?: 0
+            }
+        }
+        if (position > 0 && position < (recyclerView.adapter?.itemCount ?: 0)) {
+            recyclerView.scrollToPosition(position)
+        }
+    }
+
     // ── Load Books ────────────────────────────────────────────────
     private fun loadBooks() {
+        saveScrollPosition()
         currentState = PageState.Books
         updateToolbar("হাদিস সমগ্র")
         closeSearchSilently()
@@ -486,6 +528,7 @@ class MainActivity : AppCompatActivity() {
             currentBooks = memBooks
             showContent()
             recyclerView.adapter = BookAdapter(memBooks) { book -> loadSections(book.id, book.titleEn) }
+            restoreScrollPosition()
             return
         }
 
@@ -501,6 +544,7 @@ class MainActivity : AppCompatActivity() {
                 currentBooks = books
                 showContent()
                 recyclerView.adapter = BookAdapter(books) { book -> loadSections(book.id, book.titleEn) }
+                restoreScrollPosition()
             } catch (e: Exception) {
                 showError("বই লোড করতে সমস্যা হয়েছে") { loadBooks() }
             }
@@ -523,6 +567,7 @@ class MainActivity : AppCompatActivity() {
 
     // ── Load Sections ─────────────────────────────────────────────
     private fun loadSections(bookId: Int, bookTitle: String) {
+        saveScrollPosition()
         currentState = PageState.Sections(bookId, bookTitle)
         updateToolbar(bookTitle)
         closeSearchSilently()
@@ -534,6 +579,7 @@ class MainActivity : AppCompatActivity() {
             recyclerView.adapter = SectionAdapter(memSections) { section ->
                 loadHadith(bookId, section.id, bookTitle, section.title)
             }
+            restoreScrollPosition()
             return
         }
 
@@ -551,6 +597,7 @@ class MainActivity : AppCompatActivity() {
                 recyclerView.adapter = SectionAdapter(sections) { section ->
                     loadHadith(bookId, section.id, bookTitle, section.title)
                 }
+                restoreScrollPosition()
             } catch (e: Exception) {
                 showError("অধ্যায় লোড করতে সমস্যা হয়েছে") { loadSections(bookId, bookTitle) }
             }
@@ -560,7 +607,6 @@ class MainActivity : AppCompatActivity() {
     private fun parseSections(json: String): List<SectionItem> {
         val arr = JSONArray(json)
         return (0 until arr.length()).map { arr.getJSONObject(it) }.map { o ->
-            // title / title_en / title_ar may be JSON null — safeString returns "" in that case
             val rawTitle   = o.safeString("title", o.safeString("title_en", ""))
             val rawTitleAr = o.safeString("title_ar")
             SectionItem(
@@ -577,6 +623,7 @@ class MainActivity : AppCompatActivity() {
 
     // ── Load Hadith ───────────────────────────────────────────────
     private fun loadHadith(bookId: Int, sectionId: Int, bookTitle: String, sectionTitle: String) {
+        saveScrollPosition()
         currentState = PageState.Hadith(bookId, sectionId, bookTitle, sectionTitle)
         updateToolbar(sectionTitle)
         closeSearchSilently()
@@ -590,6 +637,7 @@ class MainActivity : AppCompatActivity() {
                 onCopy  = { h -> copyHadith(h, bookTitle, sectionTitle) },
                 onShare = { h -> shareHadith(h, bookTitle, sectionTitle) }
             )
+            restoreScrollPosition()
             return
         }
 
@@ -608,6 +656,7 @@ class MainActivity : AppCompatActivity() {
                     onCopy  = { h -> copyHadith(h, bookTitle, sectionTitle) },
                     onShare = { h -> shareHadith(h, bookTitle, sectionTitle) }
                 )
+                restoreScrollPosition()
             } catch (e: Exception) {
                 showError("হাদিস লোড করতে সমস্যা হয়েছে") {
                     loadHadith(bookId, sectionId, bookTitle, sectionTitle)
@@ -908,22 +957,46 @@ class MainActivity : AppCompatActivity() {
             holder.card.removeAllViews()
             holder.card.setOnClickListener { onClick(book) }
 
-            // বাংলা ক্রমিক নম্বর সহ শিরোনাম — blank/null হলে hide
+            // Header row with badge
+            val headerRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+
+            // Bangla number badge
+            val badge = TextView(this@MainActivity).apply {
+                text = toBangla(position + 1)
+                textSize = 13f
+                setTextColor(Color.WHITE)
+                typeface = getBengaliTypeface()
+                background = createRoundedSolid(Color.parseColor("#01837A"), dp(16))
+                gravity = Gravity.CENTER
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(10) }
+            }
+            headerRow.addView(badge)
+
+            // Title
             val displayTitle = book.titleEn.ifBlank { book.titleAr }
             if (displayTitle.isNotBlank()) {
-                holder.card.addView(TextView(this@MainActivity).apply {
-                    text = "(${toBangla(position + 1)}). $displayTitle"
+                headerRow.addView(TextView(this@MainActivity).apply {
+                    text = displayTitle
                     textSize = 17f
                     setTextColor(Color.parseColor("#01837A"))
                     typeface = getBengaliTypeface()
                     layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
+                        0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
                     )
                 })
             }
+            holder.card.addView(headerRow)
 
-            // আরবি শিরোনাম — JSON null/blank হলে hide
+            // আরবি শিরোনাম
             if (book.titleAr.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     text = book.titleAr
@@ -1004,21 +1077,45 @@ class MainActivity : AppCompatActivity() {
             holder.card.removeAllViews()
             holder.card.setOnClickListener { onClick(section) }
 
-            // বাংলা / Urdu / Latin শিরোনাম — JSON null/blank হলে hide
+            // Header row with badge
+            val headerRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+
+            // Bangla number badge
+            val badge = TextView(this@MainActivity).apply {
+                text = toBangla(position + 1)
+                textSize = 13f
+                setTextColor(Color.WHITE)
+                typeface = getBengaliTypeface()
+                background = createRoundedSolid(Color.parseColor("#01837A"), dp(16))
+                gravity = Gravity.CENTER
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(10) }
+            }
+            headerRow.addView(badge)
+
+            // Title
             if (section.title.isNotBlank()) {
-                holder.card.addView(TextView(this@MainActivity).apply {
+                headerRow.addView(TextView(this@MainActivity).apply {
                     text = section.title
                     textSize = 17f
                     setTextColor(Color.parseColor("#01837A"))
                     typeface = getBengaliTypeface()
                     layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
+                        0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
                     )
                 })
             }
+            holder.card.addView(headerRow)
 
-            // আরবি শিরোনাম — JSON null/blank হলে সম্পূর্ণ hide
+            // আরবি শিরোনাম
             if (section.titleAr.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     text = section.titleAr
