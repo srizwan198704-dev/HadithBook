@@ -42,7 +42,7 @@ data class BookItem(
     val titleAr: String,
     val totalSection: Int,
     val totalHadith: Int,
-    val originalPosition: Int = 0  // সার্চের পরেও মূল পজিশন মনে রাখতে
+    val originalPosition: Int = 0
 )
 
 data class SectionItem(
@@ -53,7 +53,7 @@ data class SectionItem(
     val totalHadith: Int,
     val rangeStart: Int,
     val rangeEnd: Int,
-    val originalPosition: Int = 0  // সার্চের পরেও মূল পজিশন মনে রাখতে
+    val originalPosition: Int = 0
 )
 
 data class HadithItem(
@@ -64,7 +64,7 @@ data class HadithItem(
 )
 
 // ─────────────────────────────────────────────────────────────────
-// Page State with scroll position
+// Page State
 // ─────────────────────────────────────────────────────────────────
 sealed class PageState {
     object Books : PageState()
@@ -139,6 +139,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recyclerView: RecyclerView
     private lateinit var statusView: View
     private lateinit var statusText: TextView
+    private lateinit var statusProgressBar: ProgressBar
     private lateinit var retryButton: Button
     private lateinit var fabSearchBtn: FrameLayout
     private lateinit var globalSearchOverlay: FrameLayout
@@ -156,12 +157,10 @@ class MainActivity : AppCompatActivity() {
     private var globalSearchRunnable: Runnable? = null
     private val marqueeHandler = Handler(Looper.getMainLooper())
 
-    // মূল ডাটা সোর্স
     private var currentBooks: List<BookItem> = emptyList()
     private var currentSections: List<SectionItem> = emptyList()
     private var currentHadithList: List<HadithItem> = emptyList()
-    
-    // ফিল্টার করা ডাটা (সার্চের জন্য)
+
     private var filteredBooks: List<BookItem> = emptyList()
     private var filteredSections: List<SectionItem> = emptyList()
     private var filteredHadith: List<HadithItem> = emptyList()
@@ -182,7 +181,6 @@ class MainActivity : AppCompatActivity() {
             window.decorView.systemUiVisibility = flags
         }
 
-        // Setup modern back press handling
         onBackPressedCallback = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 handleBackPress()
@@ -212,6 +210,7 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.parseColor("#F5F5F5"))
         }
 
+        // ── Toolbar ──────────────────────────────────────────────
         toolbarLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -230,119 +229,165 @@ class MainActivity : AppCompatActivity() {
         }
         toolbarTitleView = TextView(this).apply {
             text = "হাদিস সমগ্র"
-            textSize = 19f; setTextColor(Color.WHITE); typeface = getBengaliTypeface()
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            typeface = getBengaliTypeface()
             isSingleLine = true
             ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
-            marqueeRepeatLimit = -1; isSelected = true; gravity = Gravity.CENTER
+            marqueeRepeatLimit = -1
+            isSelected = true
+            gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 .apply { setMargins(dp(10), 0, dp(10), 0) }
         }
         searchToggleBtn = ImageView(this).apply {
             setImageResource(R.drawable.search)
             layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
-            setColorFilter(Color.WHITE); setOnClickListener { toggleSearch() }
+            setColorFilter(Color.WHITE)
+            setOnClickListener { toggleSearch() }
         }
-        toolbarLayout.addView(backButton); toolbarLayout.addView(toolbarTitleView)
-        toolbarLayout.addView(searchToggleBtn); root.addView(toolbarLayout)
+        toolbarLayout.addView(backButton)
+        toolbarLayout.addView(toolbarTitleView)
+        toolbarLayout.addView(searchToggleBtn)
+        root.addView(toolbarLayout)
 
+        // ── Search Bar ────────────────────────────────────────────
         searchContainer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.WHITE)
             setPadding(dp(12), dp(8), dp(12), dp(8))
-            elevation = dp(3).toFloat(); visibility = View.GONE
+            elevation = dp(3).toFloat()
+            visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
             )
         }
         searchInput = EditText(this).apply {
-            hint = "খুঁজুন..."; typeface = getBengaliTypeface(); textSize = 16f
-            setTextColor(Color.BLACK); setHintTextColor(Color.parseColor("#999999"))
+            hint = "খুঁজুন..."
+            typeface = getBengaliTypeface()
+            textSize = 16f
+            setTextColor(Color.BLACK)
+            setHintTextColor(Color.parseColor("#999999"))
             background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(24))
             setPadding(dp(16), dp(10), dp(16), dp(10))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            
             addTextChangedListener(object : TextWatcher {
                 override fun afterTextChanged(s: Editable?) {
                     searchRunnable?.let { searchHandler.removeCallbacks(it) }
-                    searchRunnable = Runnable { 
-                        performSearch(s?.toString() ?: "") 
-                    }
+                    searchRunnable = Runnable { performSearch(s?.toString() ?: "") }
                     searchRunnable?.let { searchHandler.postDelayed(it, 300) }
                 }
                 override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
                 override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
             })
         }
-        searchContainer.addView(searchInput); root.addView(searchContainer)
+        searchContainer.addView(searchInput)
+        root.addView(searchContainer)
 
+        // ── Offline Indicator ─────────────────────────────────────
         offlineIndicator = TextView(this).apply {
             text = "⚠️ অফলাইন মোড - ক্যাশে করা ডেটা দেখানো হচ্ছে"
-            textSize = 12f; setTextColor(Color.WHITE); typeface = getBengaliTypeface()
-            gravity = Gravity.CENTER; setBackgroundColor(Color.parseColor("#FF9800"))
-            setPadding(dp(8), dp(5), dp(8), dp(5)); visibility = View.GONE
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            typeface = getBengaliTypeface()
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.parseColor("#FF9800"))
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
             )
         }
         root.addView(offlineIndicator)
 
+        // ── Content Frame ─────────────────────────────────────────
         val contentFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
         }
+
         recyclerView = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
             )
-            setPadding(dp(12), dp(12), dp(12), dp(80)); clipToPadding = false
+            setPadding(dp(12), dp(12), dp(12), dp(80))
+            clipToPadding = false
         }
         contentFrame.addView(recyclerView)
 
+        // ── Status Overlay (Loading / Error) ──────────────────────
         val statusOverlay = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
             setBackgroundColor(Color.parseColor("#F5F5F5"))
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
-            ); visibility = View.GONE
+            )
+            visibility = View.GONE
         }
+
+        // ProgressBar — shown only while loading
+        statusProgressBar = ProgressBar(this, null, android.R.attr.progressBarStyleLarge).apply {
+            indeterminateTintList =
+                android.content.res.ColorStateList.valueOf(Color.parseColor("#01837A"))
+            layoutParams = LinearLayout.LayoutParams(dp(56), dp(56)).apply {
+                bottomMargin = dp(16)
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
+            visibility = View.GONE
+        }
+        statusOverlay.addView(statusProgressBar)
+
         statusText = TextView(this).apply {
-            textSize = 17f; typeface = getBengaliTypeface(); gravity = Gravity.CENTER
+            textSize = 17f
+            typeface = getBengaliTypeface()
+            gravity = Gravity.CENTER
             setPadding(dp(24), 0, dp(24), 0)
         }
         retryButton = Button(this).apply {
-            text = "আবার চেষ্টা করুন"; typeface = getBengaliTypeface()
+            text = "আবার চেষ্টা করুন"
+            typeface = getBengaliTypeface()
             setTextColor(Color.WHITE)
             background = createRoundedSolid(Color.parseColor("#01837A"), dp(24))
             setPadding(dp(20), dp(10), dp(20), dp(10))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(16) }; visibility = View.GONE
+            ).apply { topMargin = dp(16) }
+            visibility = View.GONE
         }
-        statusOverlay.addView(statusText); statusOverlay.addView(retryButton)
-        statusView = statusOverlay; contentFrame.addView(statusOverlay)
+        statusOverlay.addView(statusText)
+        statusOverlay.addView(retryButton)
+        statusView = statusOverlay
+        contentFrame.addView(statusOverlay)
 
+        // ── FAB Search Button ─────────────────────────────────────
         fabSearchBtn = FrameLayout(this).apply {
             val size = dp(52)
             layoutParams = FrameLayout.LayoutParams(size, size, Gravity.BOTTOM or Gravity.END)
                 .apply { setMargins(0, 0, dp(20), dp(20)) }
             background = createRoundedSolid(Color.parseColor("#01837A"), size / 2)
-            elevation = dp(6).toFloat(); setOnClickListener { openGlobalSearch() }
+            elevation = dp(6).toFloat()
+            setOnClickListener { openGlobalSearch() }
         }
         fabSearchBtn.addView(ImageView(this).apply {
-            setImageResource(R.drawable.search); setColorFilter(Color.WHITE)
+            setImageResource(R.drawable.search)
+            setColorFilter(Color.WHITE)
             layoutParams = FrameLayout.LayoutParams(dp(26), dp(26), Gravity.CENTER)
         })
-        contentFrame.addView(fabSearchBtn); root.addView(contentFrame)
+        contentFrame.addView(fabSearchBtn)
+        root.addView(contentFrame)
 
+        // ── Global Search Overlay ─────────────────────────────────
         globalSearchOverlay = buildGlobalSearchOverlay()
         val decorFrame = FrameLayout(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
             )
         }
-        decorFrame.addView(root); decorFrame.addView(globalSearchOverlay)
+        decorFrame.addView(root)
+        decorFrame.addView(globalSearchOverlay)
         return decorFrame
     }
 
@@ -350,16 +395,21 @@ class MainActivity : AppCompatActivity() {
         val overlay = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
-            ); setBackgroundColor(Color.TRANSPARENT); visibility = View.GONE
+            )
+            setBackgroundColor(Color.TRANSPARENT)
+            visibility = View.GONE
         }
         val popup = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.WHITE)
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.WHITE)
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
             )
         }
+
         val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(Color.parseColor("#01837A"))
             setPadding(dp(12), dp(14), dp(12), dp(14))
             layoutParams = LinearLayout.LayoutParams(
@@ -367,16 +417,20 @@ class MainActivity : AppCompatActivity() {
             )
         }
         header.addView(ImageView(this).apply {
-            setImageResource(R.drawable.back); setColorFilter(Color.WHITE)
+            setImageResource(R.drawable.back)
+            setColorFilter(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
             setOnClickListener { closeGlobalSearch() }
         })
         header.addView(TextView(this).apply {
-            text = "সম্পূর্ণ হাদিস সার্চ"; textSize = 17f
-            setTextColor(Color.WHITE); typeface = getBengaliTypeface()
+            text = "সম্পূর্ণ হাদিস সার্চ"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            typeface = getBengaliTypeface()
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 .apply { setMargins(dp(10), 0, 0, 0) }
         })
+
         val inputWrap = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.parseColor("#F0FFFE"))
@@ -387,19 +441,19 @@ class MainActivity : AppCompatActivity() {
         }
         globalSearchInput = EditText(this).apply {
             hint = "হাদিস নম্বর, শিরোনাম বা বাংলা/আরবি লিখুন..."
-            typeface = getBengaliTypeface(); textSize = 16f
-            setTextColor(Color.BLACK); setHintTextColor(Color.parseColor("#999999"))
+            typeface = getBengaliTypeface()
+            textSize = 16f
+            setTextColor(Color.BLACK)
+            setHintTextColor(Color.parseColor("#999999"))
             background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(24))
             setPadding(dp(16), dp(10), dp(16), dp(10))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            
             addTextChangedListener(object : TextWatcher {
                 override fun afterTextChanged(s: Editable?) {
                     val query = s?.toString()?.trim() ?: ""
                     globalSearchRunnable?.let { globalSearchHandler.removeCallbacks(it) }
-                    
                     when {
                         query.length < 2 -> {
                             globalSearchStatus.text = "কমপক্ষে ২টি অক্ষর লিখুন..."
@@ -407,9 +461,7 @@ class MainActivity : AppCompatActivity() {
                         }
                         else -> {
                             globalSearchStatus.text = "⏳ টাইপ করা থামলে সার্চ শুরু হবে..."
-                            globalSearchRunnable = Runnable { 
-                                performGlobalSearchFromCache(query) 
-                            }
+                            globalSearchRunnable = Runnable { performGlobalSearchFromCache(query) }
                             globalSearchRunnable?.let { globalSearchHandler.postDelayed(it, 600) }
                         }
                     }
@@ -419,15 +471,19 @@ class MainActivity : AppCompatActivity() {
             })
         }
         inputWrap.addView(globalSearchInput)
+
         globalSearchStatus = TextView(this).apply {
-            text = "সার্চ করতে টাইপ করুন..."; textSize = 13f
-            setTextColor(Color.parseColor("#666666")); typeface = getBengaliTypeface()
+            text = "সার্চ করতে টাইপ করুন..."
+            textSize = 13f
+            setTextColor(Color.parseColor("#666666"))
+            typeface = getBengaliTypeface()
             setBackgroundColor(Color.parseColor("#F9F9F9"))
             setPadding(dp(15), dp(8), dp(15), dp(8))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
             )
         }
+
         val resultsFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
         }
@@ -436,59 +492,80 @@ class MainActivity : AppCompatActivity() {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
             )
-            setPadding(dp(12), dp(10), dp(12), dp(12)); clipToPadding = false; visibility = View.GONE
-            
-            // ✅ সার্চ রেজাল্টে ক্লিক করলে কীবোর্ড হাইড হবে
+            setPadding(dp(12), dp(10), dp(12), dp(12))
+            clipToPadding = false
+            visibility = View.GONE
             addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
                 override fun onInterceptTouchEvent(rv: RecyclerView, e: android.view.MotionEvent): Boolean {
-                    if (e.action == android.view.MotionEvent.ACTION_DOWN) {
-                        hideKeyboard(globalSearchInput)
-                    }
+                    if (e.action == android.view.MotionEvent.ACTION_DOWN) hideKeyboard(globalSearchInput)
                     return false
                 }
             })
         }
         globalSearchHint = TextView(this).apply {
             text = "🔍 সমস্ত হাদিস বই থেকে সার্চ করুন\n\nহাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে"
-            textSize = 15f; typeface = getBengaliTypeface(); setTextColor(Color.parseColor("#999999"))
-            gravity = Gravity.CENTER; setPadding(dp(24), dp(40), dp(24), dp(40))
+            textSize = 15f
+            typeface = getBengaliTypeface()
+            setTextColor(Color.parseColor("#999999"))
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(40), dp(24), dp(40))
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP
             )
         }
-        resultsFrame.addView(globalSearchRecycler); resultsFrame.addView(globalSearchHint)
-        popup.addView(header); popup.addView(inputWrap)
-        popup.addView(globalSearchStatus); popup.addView(resultsFrame)
+        resultsFrame.addView(globalSearchRecycler)
+        resultsFrame.addView(globalSearchHint)
+        popup.addView(header)
+        popup.addView(inputWrap)
+        popup.addView(globalSearchStatus)
+        popup.addView(resultsFrame)
         overlay.addView(popup)
         return overlay
     }
 
-    // ✅ হেল্পার মেথড: কীবোর্ড হাইড করা
+    // ─────────────────────────────────────────────────────────────
+    // Keyboard helper
+    // ─────────────────────────────────────────────────────────────
     private fun hideKeyboard(view: View) {
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.hideSoftInputFromWindow(view.windowToken, 0)
     }
 
-    private fun updateToolbar(title: String) { toolbarTitleView.text = title }
+    private fun updateToolbar(title: String) {
+        toolbarTitleView.text = title
+    }
 
+    // ─────────────────────────────────────────────────────────────
+    // Status helpers — Loading shows ProgressBar, Error hides it
+    // ─────────────────────────────────────────────────────────────
     private fun showLoading() {
-        recyclerView.visibility = View.GONE; statusView.visibility = View.VISIBLE
-        statusText.text = "লোড হচ্ছে..."; statusText.setTextColor(Color.parseColor("#01837A"))
+        recyclerView.visibility = View.GONE
+        statusView.visibility = View.VISIBLE
+        statusProgressBar.visibility = View.VISIBLE
+        statusText.text = "লোড হচ্ছে..."
+        statusText.setTextColor(Color.parseColor("#01837A"))
         retryButton.visibility = View.GONE
     }
 
     private fun showError(message: String, retry: (() -> Unit)? = null) {
-        recyclerView.visibility = View.GONE; statusView.visibility = View.VISIBLE
-        statusText.text = "❌ $message"; statusText.setTextColor(Color.parseColor("#E74C3C"))
+        recyclerView.visibility = View.GONE
+        statusView.visibility = View.VISIBLE
+        statusProgressBar.visibility = View.GONE        // hide spinner on error
+        statusText.text = "❌ $message"
+        statusText.setTextColor(Color.parseColor("#E74C3C"))
         retryButton.visibility = if (retry != null) View.VISIBLE else View.GONE
         retry?.let { r -> retryButton.setOnClickListener { r() } }
     }
 
     private fun showContent() {
         statusView.visibility = View.GONE
+        statusProgressBar.visibility = View.GONE
         recyclerView.visibility = View.VISIBLE
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // Cache helpers
+    // ─────────────────────────────────────────────────────────────
     private fun cacheFileName(key: String): String {
         val md = MessageDigest.getInstance("MD5")
         return md.digest(key.toByteArray()).joinToString("") { "%02x".format(it) } + ".json"
@@ -528,21 +605,23 @@ class MainActivity : AppCompatActivity() {
         return num.toString().map { if (it.isDigit()) d[it - '0'] else it }.joinToString("")
     }
 
-    // ── Save & Restore Scroll Position ────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Scroll helpers
+    // ─────────────────────────────────────────────────────────────
     private fun saveScrollPosition() {
         if (!::recyclerView.isInitialized) return
-        val layoutManager = recyclerView.layoutManager as? LinearLayoutManager ?: return
-        val position = layoutManager.findFirstVisibleItemPosition()
+        val lm = recyclerView.layoutManager as? LinearLayoutManager ?: return
+        val position = lm.findFirstVisibleItemPosition()
         if (position < 0) return
         when (currentState) {
             is PageState.Books -> ScrollState.booksPosition = position
             is PageState.Sections -> {
-                val state = currentState as PageState.Sections
-                ScrollState.sectionsPositions[state.bookId] = position
+                val s = currentState as PageState.Sections
+                ScrollState.sectionsPositions[s.bookId] = position
             }
             is PageState.Hadith -> {
-                val state = currentState as PageState.Hadith
-                ScrollState.hadithPositions["${state.bookId}_${state.sectionId}"] = position
+                val s = currentState as PageState.Hadith
+                ScrollState.hadithPositions["${s.bookId}_${s.sectionId}"] = position
             }
         }
     }
@@ -551,12 +630,12 @@ class MainActivity : AppCompatActivity() {
         val position = when (currentState) {
             is PageState.Books -> ScrollState.booksPosition
             is PageState.Sections -> {
-                val state = currentState as PageState.Sections
-                ScrollState.sectionsPositions[state.bookId] ?: 0
+                val s = currentState as PageState.Sections
+                ScrollState.sectionsPositions[s.bookId] ?: 0
             }
             is PageState.Hadith -> {
-                val state = currentState as PageState.Hadith
-                ScrollState.hadithPositions["${state.bookId}_${state.sectionId}"] ?: 0
+                val s = currentState as PageState.Hadith
+                ScrollState.hadithPositions["${s.bookId}_${s.sectionId}"] ?: 0
             }
         }
         if (position > 0 && position < (recyclerView.adapter?.itemCount ?: 0)) {
@@ -564,7 +643,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── Load Books ────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // RecyclerView touch — hide keyboard on scroll tap
+    // ─────────────────────────────────────────────────────────────
+    private fun attachKeyboardHideOnTouch() {
+        recyclerView.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
+            override fun onInterceptTouchEvent(rv: RecyclerView, e: android.view.MotionEvent): Boolean {
+                if (e.action == android.view.MotionEvent.ACTION_DOWN && isSearchOpen)
+                    hideKeyboard(searchInput)
+                return false
+            }
+        })
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Load Books
+    // ─────────────────────────────────────────────────────────────
     private fun loadBooks() {
         saveScrollPosition()
         currentState = PageState.Books
@@ -577,17 +671,7 @@ class MainActivity : AppCompatActivity() {
             filteredBooks = memBooks
             showContent()
             recyclerView.adapter = BookAdapter(filteredBooks) { book -> loadSections(book.id, book.titleEn) }
-            
-            // ✅ সার্চ রেজাল্টে ক্লিক করলে কীবোর্ড হাইড হবে
-            recyclerView.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
-                override fun onInterceptTouchEvent(rv: RecyclerView, e: android.view.MotionEvent): Boolean {
-                    if (e.action == android.view.MotionEvent.ACTION_DOWN && isSearchOpen) {
-                        hideKeyboard(searchInput)
-                    }
-                    return false
-                }
-            })
-            
+            attachKeyboardHideOnTouch()
             restoreScrollPosition()
             return
         }
@@ -605,17 +689,7 @@ class MainActivity : AppCompatActivity() {
                 filteredBooks = books
                 showContent()
                 recyclerView.adapter = BookAdapter(filteredBooks) { book -> loadSections(book.id, book.titleEn) }
-                
-                // ✅ সার্চ রেজাল্টে ক্লিক করলে কীবোর্ড হাইড হবে
-                recyclerView.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
-                    override fun onInterceptTouchEvent(rv: RecyclerView, e: android.view.MotionEvent): Boolean {
-                        if (e.action == android.view.MotionEvent.ACTION_DOWN && isSearchOpen) {
-                            hideKeyboard(searchInput)
-                        }
-                        return false
-                    }
-                })
-                
+                attachKeyboardHideOnTouch()
                 restoreScrollPosition()
             } catch (e: Exception) {
                 showError("বই লোড করতে সমস্যা হয়েছে") { loadBooks() }
@@ -623,24 +697,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ✅ আপডেটেড: originalPosition সহ বই পার্স করা
     private fun parseBooks(json: String): List<BookItem> {
         val arr = JSONArray(json)
         return (0 until arr.length()).mapIndexed { index, _ ->
             val o = arr.getJSONObject(index)
             BookItem(
-                id           = o.optInt("id"),
-                sequence     = o.optInt("sequence"),
-                titleEn      = o.safeString("title_en", o.safeString("title", "")),
-                titleAr      = o.safeString("title_ar"),
-                totalSection = o.optInt("total_section"),
-                totalHadith  = o.optInt("total_hadith"),
-                originalPosition = index  // মূল পজিশন সংরক্ষণ
+                id               = o.optInt("id"),
+                sequence         = o.optInt("sequence"),
+                titleEn          = o.safeString("title_en", o.safeString("title", "")),
+                titleAr          = o.safeString("title_ar"),
+                totalSection     = o.optInt("total_section"),
+                totalHadith      = o.optInt("total_hadith"),
+                originalPosition = index
             )
         }.sortedBy { it.sequence }
     }
 
-    // ── Load Sections ─────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Load Sections
+    // ─────────────────────────────────────────────────────────────
     private fun loadSections(bookId: Int, bookTitle: String) {
         saveScrollPosition()
         currentState = PageState.Sections(bookId, bookTitle)
@@ -655,17 +730,7 @@ class MainActivity : AppCompatActivity() {
             recyclerView.adapter = SectionAdapter(filteredSections) { section ->
                 loadHadith(bookId, section.id, bookTitle, section.title)
             }
-            
-            // ✅ সার্চ রেজাল্টে ক্লিক করলে কীবোর্ড হাইড হবে
-            recyclerView.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
-                override fun onInterceptTouchEvent(rv: RecyclerView, e: android.view.MotionEvent): Boolean {
-                    if (e.action == android.view.MotionEvent.ACTION_DOWN && isSearchOpen) {
-                        hideKeyboard(searchInput)
-                    }
-                    return false
-                }
-            })
-            
+            attachKeyboardHideOnTouch()
             restoreScrollPosition()
             return
         }
@@ -685,17 +750,7 @@ class MainActivity : AppCompatActivity() {
                 recyclerView.adapter = SectionAdapter(filteredSections) { section ->
                     loadHadith(bookId, section.id, bookTitle, section.title)
                 }
-                
-                // ✅ সার্চ রেজাল্টে ক্লিক করলে কীবোর্ড হাইড হবে
-                recyclerView.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
-                    override fun onInterceptTouchEvent(rv: RecyclerView, e: android.view.MotionEvent): Boolean {
-                        if (e.action == android.view.MotionEvent.ACTION_DOWN && isSearchOpen) {
-                            hideKeyboard(searchInput)
-                        }
-                        return false
-                    }
-                })
-                
+                attachKeyboardHideOnTouch()
                 restoreScrollPosition()
             } catch (e: Exception) {
                 showError("অধ্যায় লোড করতে সমস্যা হয়েছে") { loadSections(bookId, bookTitle) }
@@ -703,27 +758,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ✅ আপডেটেড: originalPosition সহ সেকশন পার্স করা
     private fun parseSections(json: String): List<SectionItem> {
         val arr = JSONArray(json)
         return (0 until arr.length()).mapIndexed { index, _ ->
             val o = arr.getJSONObject(index)
-            val rawTitle   = o.safeString("title", o.safeString("title_en", ""))
-            val rawTitleAr = o.safeString("title_ar")
             SectionItem(
-                id          = o.optInt("id"),
-                sequence    = o.optInt("sequence"),
-                title       = rawTitle,
-                titleAr     = rawTitleAr,
-                totalHadith = o.optInt("total_hadith"),
-                rangeStart  = o.optInt("range_start"),
-                rangeEnd    = o.optInt("range_end"),
-                originalPosition = index  // মূল পজিশন সংরক্ষণ
+                id               = o.optInt("id"),
+                sequence         = o.optInt("sequence"),
+                title            = o.safeString("title", o.safeString("title_en", "")),
+                titleAr          = o.safeString("title_ar"),
+                totalHadith      = o.optInt("total_hadith"),
+                rangeStart       = o.optInt("range_start"),
+                rangeEnd         = o.optInt("range_end"),
+                originalPosition = index
             )
         }.sortedBy { it.sequence }
     }
 
-    // ── Load Hadith ───────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Load Hadith
+    // ─────────────────────────────────────────────────────────────
     private fun loadHadith(bookId: Int, sectionId: Int, bookTitle: String, sectionTitle: String) {
         saveScrollPosition()
         currentState = PageState.Hadith(bookId, sectionId, bookTitle, sectionTitle)
@@ -736,21 +790,12 @@ class MainActivity : AppCompatActivity() {
             currentHadithList = memHadith
             filteredHadith = memHadith
             showContent()
-            recyclerView.adapter = HadithAdapter(filteredHadith,
+            recyclerView.adapter = HadithAdapter(
+                filteredHadith,
                 onCopy  = { h -> copyHadith(h, bookTitle, sectionTitle) },
                 onShare = { h -> shareHadith(h, bookTitle, sectionTitle) }
             )
-            
-            // ✅ সার্চ রেজাল্টে ক্লিক করলে কীবোর্ড হাইড হবে
-            recyclerView.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
-                override fun onInterceptTouchEvent(rv: RecyclerView, e: android.view.MotionEvent): Boolean {
-                    if (e.action == android.view.MotionEvent.ACTION_DOWN && isSearchOpen) {
-                        hideKeyboard(searchInput)
-                    }
-                    return false
-                }
-            })
-            
+            attachKeyboardHideOnTouch()
             restoreScrollPosition()
             return
         }
@@ -767,21 +812,12 @@ class MainActivity : AppCompatActivity() {
                 currentHadithList = hadithList
                 filteredHadith = hadithList
                 showContent()
-                recyclerView.adapter = HadithAdapter(filteredHadith,
+                recyclerView.adapter = HadithAdapter(
+                    filteredHadith,
                     onCopy  = { h -> copyHadith(h, bookTitle, sectionTitle) },
                     onShare = { h -> shareHadith(h, bookTitle, sectionTitle) }
                 )
-                
-                // ✅ সার্চ রেজাল্টে ক্লিক করলে কীবোর্ড হাইড হবে
-                recyclerView.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
-                    override fun onInterceptTouchEvent(rv: RecyclerView, e: android.view.MotionEvent): Boolean {
-                        if (e.action == android.view.MotionEvent.ACTION_DOWN && isSearchOpen) {
-                            hideKeyboard(searchInput)
-                        }
-                        return false
-                    }
-                })
-                
+                attachKeyboardHideOnTouch()
                 restoreScrollPosition()
             } catch (e: Exception) {
                 showError("হাদিস লোড করতে সমস্যা হয়েছে") {
@@ -803,7 +839,9 @@ class MainActivity : AppCompatActivity() {
         }.sortedBy { it.hadithNumber }
     }
 
-    // ── Search ────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Search (inline — per page)
+    // ─────────────────────────────────────────────────────────────
     private fun toggleSearch() {
         if (isSearchOpen) {
             closeSearch()
@@ -820,13 +858,9 @@ class MainActivity : AppCompatActivity() {
         isSearchOpen = false
         searchContainer.visibility = View.GONE
         searchInput.setText("")
-        
         searchRunnable?.let { searchHandler.removeCallbacks(it) }
         searchRunnable = null
-        
         hideKeyboard(searchInput)
-        
-        // ফিল্টার রিসেট করে ফুল লিস্ট দেখানো
         filteredBooks = currentBooks
         filteredSections = currentSections
         filteredHadith = currentHadithList
@@ -835,10 +869,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun closeSearchSilently() {
         isSearchOpen = false
-        
         searchRunnable?.let { searchHandler.removeCallbacks(it) }
         searchRunnable = null
-        
         searchContainer.visibility = View.GONE
         searchInput.setText("")
         filteredBooks = currentBooks
@@ -850,9 +882,7 @@ class MainActivity : AppCompatActivity() {
         showContent()
         when (val s = currentState) {
             is PageState.Books -> {
-                recyclerView.adapter = BookAdapter(filteredBooks) { book ->
-                    loadSections(book.id, book.titleEn)
-                }
+                recyclerView.adapter = BookAdapter(filteredBooks) { book -> loadSections(book.id, book.titleEn) }
             }
             is PageState.Sections -> {
                 recyclerView.adapter = SectionAdapter(filteredSections) { section ->
@@ -872,30 +902,26 @@ class MainActivity : AppCompatActivity() {
     private fun performSearch(query: String) {
         showContent()
         val term = query.lowercase().trim()
-        
-        if (term.isBlank()) { 
+        if (term.isBlank()) {
             filteredBooks = currentBooks
             filteredSections = currentSections
             filteredHadith = currentHadithList
             restoreFullList()
-            return 
+            return
         }
-
         when (val s = currentState) {
             is PageState.Books -> {
                 filteredBooks = currentBooks.filter { b ->
-                    b.titleEn.lowercase().contains(term) || 
+                    b.titleEn.lowercase().contains(term) ||
                     b.titleAr.contains(term) ||
                     b.id.toString().contains(term)
                 }
-                recyclerView.adapter = BookAdapter(filteredBooks) { book -> 
-                    loadSections(book.id, book.titleEn) 
-                }
+                recyclerView.adapter = BookAdapter(filteredBooks) { book -> loadSections(book.id, book.titleEn) }
                 if (filteredBooks.isEmpty()) showEmptySearchResult()
             }
             is PageState.Sections -> {
                 filteredSections = currentSections.filter { sec ->
-                    sec.title.lowercase().contains(term) || 
+                    sec.title.lowercase().contains(term) ||
                     sec.titleAr.contains(term) ||
                     sec.id.toString().contains(term)
                 }
@@ -925,7 +951,9 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "কোনো ফলাফল পাওয়া যায়নি", Toast.LENGTH_SHORT).show()
     }
 
-    // ── Global Search ─────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Global Search
+    // ─────────────────────────────────────────────────────────────
     private fun openGlobalSearch() {
         isGlobalSearchOpen = true
         globalSearchOverlay.visibility = View.VISIBLE
@@ -934,10 +962,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun closeGlobalSearch() {
         isGlobalSearchOpen = false
-        
         globalSearchRunnable?.let { globalSearchHandler.removeCallbacks(it) }
         globalSearchRunnable = null
-        
         globalSearchOverlay.visibility = View.GONE
         globalSearchInput.setText("")
         globalSearchStatus.text = "সার্চ করতে টাইপ করুন..."
@@ -984,8 +1010,13 @@ class MainActivity : AppCompatActivity() {
                         h.descriptionAr.contains(term)
                     }.forEach { h ->
                         results.add(
-                            GlobalSearchResult(h, book.titleEn.ifBlank { book.titleAr },
-                                book.id, section.title, section.id)
+                            GlobalSearchResult(
+                                h,
+                                book.titleEn.ifBlank { book.titleAr },
+                                book.id,
+                                section.title,
+                                section.id
+                            )
                         )
                     }
                 }
@@ -1014,16 +1045,20 @@ class MainActivity : AppCompatActivity() {
                         globalSearchStatus.text = "✅ ${toBangla(results.size)} টি হাদিস পাওয়া গেছে"
                         globalSearchHint.visibility = View.GONE
                         globalSearchRecycler.visibility = View.VISIBLE
-                        globalSearchRecycler.adapter = GlobalSearchAdapter(results,
+                        globalSearchRecycler.adapter = GlobalSearchAdapter(
+                            results,
                             onCopy  = { r -> copyHadith(r.hadith, r.bookTitle, r.sectionTitle) },
-                            onShare = { r -> shareHadith(r.hadith, r.bookTitle, r.sectionTitle) })
+                            onShare = { r -> shareHadith(r.hadith, r.bookTitle, r.sectionTitle) }
+                        )
                     }
                 }
             }
         }
     }
 
-    // ── Copy / Share ──────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Copy / Share
+    // ─────────────────────────────────────────────────────────────
     private fun copyHadith(hadith: HadithItem, bookTitle: String, sectionTitle: String) {
         val text = buildPlainText(hadith, bookTitle, sectionTitle, withAppLink = false)
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -1033,13 +1068,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun shareHadith(hadith: HadithItem, bookTitle: String, sectionTitle: String) {
         val text = buildPlainText(hadith, bookTitle, sectionTitle, withAppLink = true)
-        startActivity(Intent.createChooser(
-            Intent(Intent.ACTION_SEND).apply { 
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, text) 
-            },
-            "শেয়ার করুন"
-        ))
+        startActivity(
+            Intent.createChooser(
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, text)
+                },
+                "শেয়ার করুন"
+            )
+        )
     }
 
     private fun buildPlainText(
@@ -1057,15 +1094,13 @@ class MainActivity : AppCompatActivity() {
         if (withAppLink) "\nঅ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia" else null
     ).joinToString("\n")
 
-    // ── Modern Back Press Handling ─────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Back press
+    // ─────────────────────────────────────────────────────────────
     private fun handleBackPress() {
         when {
-            isGlobalSearchOpen -> {
-                closeGlobalSearch()
-            }
-            isSearchOpen -> {
-                closeSearch()
-            }
+            isGlobalSearchOpen -> closeGlobalSearch()
+            isSearchOpen -> closeSearch()
             currentState is PageState.Hadith -> {
                 val s = currentState as PageState.Hadith
                 saveScrollPosition()
@@ -1075,9 +1110,7 @@ class MainActivity : AppCompatActivity() {
                 saveScrollPosition()
                 loadBooks()
             }
-            else -> {
-                finish()
-            }
+            else -> finish()
         }
     }
 
@@ -1085,26 +1118,22 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         scope.cancel()
         marqueeHandler.removeCallbacksAndMessages(null)
-        
         searchRunnable?.let { searchHandler.removeCallbacks(it) }
         globalSearchRunnable?.let { globalSearchHandler.removeCallbacks(it) }
-        
         searchHandler.removeCallbacksAndMessages(null)
         globalSearchHandler.removeCallbacksAndMessages(null)
     }
 
-    // ── Helpers ───────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
+    // Drawing helpers
+    // ─────────────────────────────────────────────────────────────
     private fun getBengaliTypeface() = try {
         android.graphics.Typeface.createFromAsset(assets, "fonts/SolaimanLipi.ttf")
-    } catch (e: Exception) { 
-        android.graphics.Typeface.DEFAULT 
-    }
+    } catch (e: Exception) { android.graphics.Typeface.DEFAULT }
 
     private fun getArabicTypeface() = try {
         android.graphics.Typeface.createFromAsset(assets, "fonts/noorehuda.ttf")
-    } catch (e: Exception) { 
-        android.graphics.Typeface.DEFAULT 
-    }
+    } catch (e: Exception) { android.graphics.Typeface.DEFAULT }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
@@ -1131,7 +1160,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Book Adapter (✅ আপডেটেড: originalPosition থেকে ব্যাজ নাম্বার)
+    // Book Adapter
+    // badge number comes from originalPosition (never changes on search)
+    // blank titleAr row is skipped when empty
     // ─────────────────────────────────────────────────────────────
     inner class BookAdapter(
         private val items: List<BookItem>,
@@ -1155,11 +1186,12 @@ class MainActivity : AppCompatActivity() {
         override fun onBindViewHolder(holder: VH, position: Int) {
             val book = items[position]
             holder.card.removeAllViews()
-            holder.card.setOnClickListener { 
+            holder.card.setOnClickListener {
                 hideKeyboard(searchInput)
-                onClick(book) 
+                onClick(book)
             }
 
+            // ── Header row: badge + title ─────────────────────────
             val headerRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1168,8 +1200,8 @@ class MainActivity : AppCompatActivity() {
                 )
             }
 
-            // ✅ মূল পজিশন থেকে ব্যাজ নাম্বার দেখানো (সার্চ করলেও পরিবর্তন হবে না)
-            val badge = TextView(this@MainActivity).apply {
+            // Badge uses originalPosition — stays fixed even after search filter
+            headerRow.addView(TextView(this@MainActivity).apply {
                 text = toBangla(book.originalPosition + 1)
                 textSize = 13f
                 setTextColor(Color.WHITE)
@@ -1180,26 +1212,25 @@ class MainActivity : AppCompatActivity() {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply { marginEnd = dp(10) }
-            }
-            headerRow.addView(badge)
+            })
 
-            val displayTitle = book.titleEn.ifBlank { book.titleAr }
+            val displayTitle = book.titleEn.trim().ifBlank { book.titleAr.trim() }
             if (displayTitle.isNotBlank()) {
                 headerRow.addView(TextView(this@MainActivity).apply {
                     text = displayTitle
                     textSize = 17f
                     setTextColor(Color.parseColor("#01837A"))
                     typeface = getBengaliTypeface()
-                    layoutParams = LinearLayout.LayoutParams(
-                        0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-                    )
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 })
             }
             holder.card.addView(headerRow)
 
-            if (book.titleAr.isNotBlank()) {
+            // Arabic title — only if non-blank
+            val arTitle = book.titleAr.trim()
+            if (arTitle.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
-                    text = book.titleAr
+                    text = arTitle
                     textSize = 18f
                     setTextColor(Color.parseColor("#333333"))
                     typeface = getArabicTypeface()
@@ -1211,21 +1242,20 @@ class MainActivity : AppCompatActivity() {
                 })
             }
 
+            // Divider
             holder.card.addView(View(this@MainActivity).apply {
                 setBackgroundColor(Color.parseColor("#DDDDDD"))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1)
-                )
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
             })
 
+            // Meta row — only if there's something to show
             val hasSectionCount = book.totalSection > 0
             val hasHadithCount  = book.totalHadith > 0
             if (hasSectionCount || hasHadithCount) {
                 val meta = LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(8) }
                 }
                 if (hasSectionCount) {
@@ -1253,7 +1283,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Section Adapter (✅ আপডেটেড: originalPosition থেকে ব্যাজ নাম্বার)
+    // Section Adapter
+    // badge number comes from originalPosition (never changes on search)
+    // blank titleAr row is skipped when empty
     // ─────────────────────────────────────────────────────────────
     inner class SectionAdapter(
         private val items: List<SectionItem>,
@@ -1277,11 +1309,12 @@ class MainActivity : AppCompatActivity() {
         override fun onBindViewHolder(holder: VH, position: Int) {
             val section = items[position]
             holder.card.removeAllViews()
-            holder.card.setOnClickListener { 
+            holder.card.setOnClickListener {
                 hideKeyboard(searchInput)
-                onClick(section) 
+                onClick(section)
             }
 
+            // ── Header row: badge + title ─────────────────────────
             val headerRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1290,8 +1323,8 @@ class MainActivity : AppCompatActivity() {
                 )
             }
 
-            // ✅ মূল পজিশন থেকে ব্যাজ নাম্বার দেখানো (সার্চ করলেও পরিবর্তন হবে না)
-            val badge = TextView(this@MainActivity).apply {
+            // Badge uses originalPosition — stays fixed even after search filter
+            headerRow.addView(TextView(this@MainActivity).apply {
                 text = toBangla(section.originalPosition + 1)
                 textSize = 13f
                 setTextColor(Color.WHITE)
@@ -1302,25 +1335,25 @@ class MainActivity : AppCompatActivity() {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply { marginEnd = dp(10) }
-            }
-            headerRow.addView(badge)
+            })
 
-            if (section.title.isNotBlank()) {
+            val sectionTitle = section.title.trim()
+            if (sectionTitle.isNotBlank()) {
                 headerRow.addView(TextView(this@MainActivity).apply {
-                    text = section.title
+                    text = sectionTitle
                     textSize = 17f
                     setTextColor(Color.parseColor("#01837A"))
                     typeface = getBengaliTypeface()
-                    layoutParams = LinearLayout.LayoutParams(
-                        0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-                    )
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 })
             }
             holder.card.addView(headerRow)
 
-            if (section.titleAr.isNotBlank()) {
+            // Arabic title — only if non-blank
+            val arTitle = section.titleAr.trim()
+            if (arTitle.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
-                    text = section.titleAr
+                    text = arTitle
                     textSize = 18f
                     setTextColor(Color.parseColor("#333333"))
                     typeface = getArabicTypeface()
@@ -1332,21 +1365,20 @@ class MainActivity : AppCompatActivity() {
                 })
             }
 
+            // Divider
             holder.card.addView(View(this@MainActivity).apply {
                 setBackgroundColor(Color.parseColor("#DDDDDD"))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1)
-                )
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
             })
 
+            // Meta row
             val hasHadithCount = section.totalHadith > 0
             val hasRange       = section.rangeStart > 0 && section.rangeEnd > 0
             if (hasHadithCount || hasRange) {
                 val meta = LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(8) }
                 }
                 if (hasHadithCount) {
@@ -1375,6 +1407,7 @@ class MainActivity : AppCompatActivity() {
 
     // ─────────────────────────────────────────────────────────────
     // Hadith Adapter
+    // blank fields are skipped entirely — no empty gaps
     // ─────────────────────────────────────────────────────────────
     inner class HadithAdapter(
         private val items: List<HadithItem>,
@@ -1399,12 +1432,9 @@ class MainActivity : AppCompatActivity() {
         override fun onBindViewHolder(holder: VH, position: Int) {
             val hadith = items[position]
             holder.card.removeAllViews()
-            
-            // ✅ হাদিস কার্ডে ক্লিক করলে কীবোর্ড হাইড হবে
-            holder.card.setOnClickListener {
-                hideKeyboard(searchInput)
-            }
+            holder.card.setOnClickListener { hideKeyboard(searchInput) }
 
+            // ── Header: hadith number + copy/share ────────────────
             val headerRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1439,7 +1469,9 @@ class MainActivity : AppCompatActivity() {
             })
             holder.card.addView(headerRow)
 
-            if (hadith.title.isNotBlank()) {
+            // Title — only if non-blank
+            val titleText = hadith.title.trim()
+            if (titleText.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     textSize = 18f
                     setTextColor(Color.parseColor("#01837A"))
@@ -1447,11 +1479,13 @@ class MainActivity : AppCompatActivity() {
                     layoutParams = LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(10) }
-                    setSmartText(hadith.title)
+                    setSmartText(titleText)
                 })
             }
 
-            if (hadith.descriptionAr.isNotBlank()) {
+            // Arabic description — only if non-blank
+            val arText = hadith.descriptionAr.trim()
+            if (arText.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     textSize = 20f
                     setTextColor(Color.parseColor("#333333"))
@@ -1460,11 +1494,13 @@ class MainActivity : AppCompatActivity() {
                     layoutParams = LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(12); bottomMargin = dp(6) }
-                    setSmartText(hadith.descriptionAr)
+                    setSmartText(arText)
                 })
             }
 
-            if (hadith.description.isNotBlank()) {
+            // Bengali description — only if non-blank
+            val bnText = hadith.description.trim()
+            if (bnText.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     textSize = 18f
                     setTextColor(Color.parseColor("#444444"))
@@ -1472,7 +1508,7 @@ class MainActivity : AppCompatActivity() {
                     layoutParams = LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(8) }
-                    setSmartText(hadith.description)
+                    setSmartText(bnText)
                 })
             }
         }
@@ -1482,6 +1518,7 @@ class MainActivity : AppCompatActivity() {
 
     // ─────────────────────────────────────────────────────────────
     // Global Search Result + Adapter
+    // blank fields are skipped entirely — no empty gaps
     // ─────────────────────────────────────────────────────────────
     data class GlobalSearchResult(
         val hadith: HadithItem,
@@ -1515,12 +1552,9 @@ class MainActivity : AppCompatActivity() {
             val result = items[position]
             val hadith = result.hadith
             holder.card.removeAllViews()
-            
-            // ✅ গ্লোবাল সার্চ রেজাল্টে ক্লিক করলে কীবোর্ড হাইড হবে
-            holder.card.setOnClickListener {
-                hideKeyboard(globalSearchInput)
-            }
+            holder.card.setOnClickListener { hideKeyboard(globalSearchInput) }
 
+            // ── Header: hadith number + book badge + copy/share ───
             val headerRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1538,9 +1572,10 @@ class MainActivity : AppCompatActivity() {
                     setPadding(dp(10), dp(4), dp(10), dp(4))
                 })
             }
-            if (result.bookTitle.isNotBlank()) {
+            val bookLabel = result.bookTitle.trim()
+            if (bookLabel.isNotBlank()) {
                 headerRow.addView(TextView(this@MainActivity).apply {
-                    text = result.bookTitle
+                    text = bookLabel
                     textSize = 11f
                     setTextColor(Color.parseColor("#01837A"))
                     typeface = getBengaliTypeface()
@@ -1573,7 +1608,9 @@ class MainActivity : AppCompatActivity() {
             })
             holder.card.addView(headerRow)
 
-            if (hadith.title.isNotBlank()) {
+            // Title — only if non-blank
+            val titleText = hadith.title.trim()
+            if (titleText.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     textSize = 15f
                     setTextColor(Color.parseColor("#01837A"))
@@ -1581,11 +1618,13 @@ class MainActivity : AppCompatActivity() {
                     layoutParams = LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(8) }
-                    setSmartText(hadith.title)
+                    setSmartText(titleText)
                 })
             }
 
-            if (hadith.descriptionAr.isNotBlank()) {
+            // Arabic description — only if non-blank
+            val arText = hadith.descriptionAr.trim()
+            if (arText.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     textSize = 18f
                     setTextColor(Color.parseColor("#333333"))
@@ -1594,11 +1633,13 @@ class MainActivity : AppCompatActivity() {
                     layoutParams = LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(10); bottomMargin = dp(6) }
-                    setSmartText(hadith.descriptionAr)
+                    setSmartText(arText)
                 })
             }
 
-            if (hadith.description.isNotBlank()) {
+            // Bengali description — only if non-blank
+            val bnText = hadith.description.trim()
+            if (bnText.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     textSize = 14f
                     setTextColor(Color.parseColor("#444444"))
@@ -1606,7 +1647,7 @@ class MainActivity : AppCompatActivity() {
                     layoutParams = LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(8) }
-                    setSmartText(hadith.description)
+                    setSmartText(bnText)
                 })
             }
         }
