@@ -7,7 +7,6 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -16,15 +15,20 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowManager
+import android.view.animation.Animation
+import android.view.animation.TranslateAnimation
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.updatePadding
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.*
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.net.URL
 import java.security.MessageDigest
@@ -64,12 +68,7 @@ data class HadithItem(
 sealed class PageState {
     object Books : PageState()
     data class Sections(val bookId: Int, val bookTitle: String) : PageState()
-    data class Hadith(
-        val bookId: Int,
-        val sectionId: Int,
-        val bookTitle: String,
-        val sectionTitle: String
-    ) : PageState()
+    data class Hadith(val bookId: Int, val sectionId: Int, val bookTitle: String, val sectionTitle: String) : PageState()
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -90,6 +89,7 @@ class MainActivity : AppCompatActivity() {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     // Views
+    private lateinit var rootLayout: LinearLayout
     private lateinit var toolbarLayout: LinearLayout
     private lateinit var backButton: ImageView
     private lateinit var toolbarTitleView: TextView
@@ -98,7 +98,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var searchInput: EditText
     private lateinit var offlineIndicator: TextView
     private lateinit var recyclerView: RecyclerView
-    private lateinit var statusView: View
+    private lateinit var statusView: View  // loading/error overlay
     private lateinit var statusText: TextView
     private lateinit var retryButton: Button
     private lateinit var fabSearchBtn: FrameLayout
@@ -119,43 +119,48 @@ class MainActivity : AppCompatActivity() {
     private var searchRunnable: Runnable? = null
     private val globalSearchHandler = Handler(Looper.getMainLooper())
     private var globalSearchRunnable: Runnable? = null
+
+    // Marquee scroll
     private val marqueeHandler = Handler(Looper.getMainLooper())
+    private var marqueeRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // ── Status bar / Navigation bar fix ──
-        window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS)
-        window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION)
-        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-        window.statusBarColor = Color.parseColor("#01837A")
-        window.navigationBarColor = Color.BLACK
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            var flags = window.decorView.systemUiVisibility
-            flags = flags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
-            window.decorView.systemUiVisibility = flags
-        }
-
+        // Configure window insets for edge-to-edge
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        
         val rootLayout = buildUI()
         setContentView(rootLayout)
-
-        // Apply window insets so toolbar never goes under status bar
-        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            view.setPadding(0, systemBars.top, 0, systemBars.bottom)
+        
+        // Handle insets
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { v, insets ->
+            val statusBars = insets.getInsets(WindowInsetsCompat.Type.statusBars())
+            val navBars = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            
+            toolbarLayout.updatePadding(top = statusBars.top)
+            v.updatePadding(bottom = navBars.bottom)
+            
             insets
         }
+        
+        // Status bar styling
+        window.statusBarColor = Color.parseColor("#01837A")
+        window.navigationBarColor = Color.BLACK
+        
+        val insetsController = WindowInsetsControllerCompat(window, window.decorView)
+        insetsController.isAppearanceLightStatusBars = false
+        insetsController.isAppearanceLightNavigationBars = false
 
         File(filesDir, cacheDirName).mkdirs()
         loadBooks()
     }
 
     // ─────────────────────────────────────────────────────────────
-    // UI Builder
+    // UI Builder (pure code, no XML needed)
     // ─────────────────────────────────────────────────────────────
-    private fun buildUI(): View {
-        val root = LinearLayout(this).apply {
+    private fun buildUI(): LinearLayout {
+        rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -192,9 +197,9 @@ class MainActivity : AppCompatActivity() {
             marqueeRepeatLimit = -1
             isSelected = true
             gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-            ).apply { setMargins(dp(10), 0, dp(10), 0) }
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(10), 0, dp(10), 0)
+            }
         }
         searchToggleBtn = ImageView(this).apply {
             setImageResource(R.drawable.search)
@@ -205,7 +210,7 @@ class MainActivity : AppCompatActivity() {
         toolbarLayout.addView(backButton)
         toolbarLayout.addView(toolbarTitleView)
         toolbarLayout.addView(searchToggleBtn)
-        root.addView(toolbarLayout)
+        rootLayout.addView(toolbarLayout)
 
         // ── Search bar ──
         searchContainer = LinearLayout(this).apply {
@@ -223,11 +228,9 @@ class MainActivity : AppCompatActivity() {
             hint = "খুঁজুন..."
             typeface = getBengaliTypeface()
             textSize = 16f
-            setTextColor(Color.BLACK)
             setHintTextColor(Color.parseColor("#999999"))
-            background = createRoundedBg(
-                Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(24)
-            )
+            setTextColor(Color.BLACK)
+            background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(24))
             setPadding(dp(16), dp(10), dp(16), dp(10))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -239,12 +242,12 @@ class MainActivity : AppCompatActivity() {
                     searchRunnable = Runnable { performSearch(s?.toString() ?: "") }
                     searchHandler.postDelayed(searchRunnable!!, 300)
                 }
-                override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
-                override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             })
         }
         searchContainer.addView(searchInput)
-        root.addView(searchContainer)
+        rootLayout.addView(searchContainer)
 
         // ── Offline Indicator ──
         offlineIndicator = TextView(this).apply {
@@ -261,9 +264,9 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         }
-        root.addView(offlineIndicator)
+        rootLayout.addView(offlineIndicator)
 
-        // ── Content Frame ──
+        // ── Content frame (RecyclerView + status overlay) ──
         val contentFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
@@ -318,9 +321,9 @@ class MainActivity : AppCompatActivity() {
         // ── FAB Global Search ──
         fabSearchBtn = FrameLayout(this).apply {
             val size = dp(52)
-            layoutParams = FrameLayout.LayoutParams(
-                size, size, Gravity.BOTTOM or Gravity.END
-            ).apply { setMargins(0, 0, dp(20), dp(20)) }
+            layoutParams = FrameLayout.LayoutParams(size, size, Gravity.BOTTOM or Gravity.END).apply {
+                setMargins(0, 0, dp(20), dp(20))
+            }
             background = createRoundedSolid(Color.parseColor("#01837A"), size / 2)
             elevation = dp(6).toFloat()
             setOnClickListener { openGlobalSearch() }
@@ -332,32 +335,31 @@ class MainActivity : AppCompatActivity() {
         }
         fabSearchBtn.addView(fabIcon)
         contentFrame.addView(fabSearchBtn)
-        root.addView(contentFrame)
+
+        rootLayout.addView(contentFrame)
 
         // ── Global Search Overlay ──
         globalSearchOverlay = buildGlobalSearchOverlay()
-
         val decorFrame = FrameLayout(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         }
-        decorFrame.addView(root)
+        decorFrame.addView(rootLayout)
         decorFrame.addView(globalSearchOverlay)
-        return decorFrame
+        
+        // Set rootLayout to the actual root LinearLayout for insets handling
+        return rootLayout
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Global Search Overlay
-    // ─────────────────────────────────────────────────────────────
     private fun buildGlobalSearchOverlay(): FrameLayout {
         val overlay = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
-            setBackgroundColor(Color.TRANSPARENT)
+            setBackgroundColor(Color.parseColor("#80000000"))
             visibility = View.GONE
         }
 
@@ -392,14 +394,14 @@ class MainActivity : AppCompatActivity() {
             textSize = 17f
             setTextColor(Color.WHITE)
             typeface = getBengaliTypeface()
-            layoutParams = LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-            ).apply { setMargins(dp(10), 0, 0, 0) }
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(10), 0, 0, 0)
+            }
         }
         header.addView(closeBtn)
         header.addView(headerTitle)
 
-        // Search input wrap
+        // Search input
         val inputWrap = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.parseColor("#F0FFFE"))
@@ -413,11 +415,9 @@ class MainActivity : AppCompatActivity() {
             hint = "হাদিস নম্বর, শিরোনাম বা বাংলা/আরবি লিখুন..."
             typeface = getBengaliTypeface()
             textSize = 16f
-            setTextColor(Color.BLACK)
             setHintTextColor(Color.parseColor("#999999"))
-            background = createRoundedBg(
-                Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(24)
-            )
+            setTextColor(Color.BLACK) // Fixed: Set text color to black
+            background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(24))
             setPadding(dp(16), dp(10), dp(16), dp(10))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -426,15 +426,14 @@ class MainActivity : AppCompatActivity() {
             addTextChangedListener(object : TextWatcher {
                 override fun afterTextChanged(s: Editable?) {
                     val q = s?.toString() ?: ""
-                    globalSearchHandler.removeCallbacks(globalSearchRunnable ?: Runnable {})
                     if (q.trim().length < 2) {
                         globalSearchStatus.text = "কমপক্ষে ২টি অক্ষর লিখুন..."
-                        showGlobalHint("🔍 সমস্ত হাদিস বই থেকে সার্চ করুন\n\nহাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে")
+                        showGlobalHint()
                         return
                     }
-                    globalSearchStatus.text = "⏳ টাইপ করা থামলে সার্চ শুরু হবে..."
+                    globalSearchHandler.removeCallbacks(globalSearchRunnable ?: return)
                     globalSearchRunnable = Runnable { performGlobalSearchFromCache(q.trim()) }
-                    globalSearchHandler.postDelayed(globalSearchRunnable!!, 600)
+                    globalSearchHandler.postDelayed(globalSearchRunnable!!, 400)
                 }
                 override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                 override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -456,7 +455,7 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        // Results frame
+        // Results RecyclerView
         val resultsFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
@@ -470,7 +469,6 @@ class MainActivity : AppCompatActivity() {
             )
             setPadding(dp(12), dp(10), dp(12), dp(12))
             clipToPadding = false
-            visibility = View.GONE
         }
         globalSearchHint = TextView(this).apply {
             text = "🔍 সমস্ত হাদিস বই থেকে সার্চ করুন\n\nহাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে"
@@ -497,14 +495,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Toolbar
+    // Toolbar helpers
     // ─────────────────────────────────────────────────────────────
     private fun updateToolbar(title: String) {
         toolbarTitleView.text = title
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Loading / Error / Content states
+    // Loading / Error states
     // ─────────────────────────────────────────────────────────────
     private fun showLoading() {
         recyclerView.visibility = View.GONE
@@ -519,8 +517,12 @@ class MainActivity : AppCompatActivity() {
         statusView.visibility = View.VISIBLE
         statusText.text = "❌ $message"
         statusText.setTextColor(Color.parseColor("#E74C3C"))
-        retryButton.visibility = if (retry != null) View.VISIBLE else View.GONE
-        retry?.let { r -> retryButton.setOnClickListener { r() } }
+        if (retry != null) {
+            retryButton.visibility = View.VISIBLE
+            retryButton.setOnClickListener { retry() }
+        } else {
+            retryButton.visibility = View.GONE
+        }
     }
 
     private fun showContent() {
@@ -529,8 +531,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Network + Cache
+    // Network + Cache helpers
     // ─────────────────────────────────────────────────────────────
+    private fun isNetworkAvailable(): Boolean {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = cm.activeNetwork ?: return false
+        val cap = cm.getNetworkCapabilities(network) ?: return false
+        return cap.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+               cap.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
     private fun cacheFileName(key: String): String {
         val md = MessageDigest.getInstance("MD5")
         return md.digest(key.toByteArray()).joinToString("") { "%02x".format(it) } + ".json"
@@ -548,7 +558,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun fetchJson(url: String, cacheKey: String): String {
-        // Try fresh fetch first
+        getCachedData(cacheKey)?.let {
+            offlineIndicator.visibility = View.VISIBLE
+            return it
+        }
         return withContext(Dispatchers.IO) {
             try {
                 val text = URL(url).readText()
@@ -556,20 +569,15 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) { offlineIndicator.visibility = View.GONE }
                 text
             } catch (e: Exception) {
-                // Fall back to cache
-                val cached = getCachedData(cacheKey)
-                if (cached != null) {
+                getCachedData(cacheKey)?.also {
                     withContext(Dispatchers.Main) { offlineIndicator.visibility = View.VISIBLE }
-                    cached
-                } else {
-                    throw e
-                }
+                } ?: throw e
             }
         }
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Bangla number
+    // Number → Bangla helper
     // ─────────────────────────────────────────────────────────────
     private fun toBangla(num: Int): String {
         val d = charArrayOf('০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯')
@@ -627,7 +635,8 @@ class MainActivity : AppCompatActivity() {
         showLoading()
         scope.launch {
             try {
-                val sections = HadithCache.sections[bookId] ?: run {
+                val cached = HadithCache.sections[bookId]
+                val sections = if (cached != null) cached else {
                     val json = fetchJson(
                         "https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/$bookId/title.json",
                         "sections_$bookId"
@@ -663,9 +672,7 @@ class MainActivity : AppCompatActivity() {
     // ─────────────────────────────────────────────────────────────
     // Load Hadith
     // ─────────────────────────────────────────────────────────────
-    private fun loadHadith(
-        bookId: Int, sectionId: Int, bookTitle: String, sectionTitle: String
-    ) {
+    private fun loadHadith(bookId: Int, sectionId: Int, bookTitle: String, sectionTitle: String) {
         currentState = PageState.Hadith(bookId, sectionId, bookTitle, sectionTitle)
         updateToolbar(sectionTitle)
         recyclerView.scrollToPosition(0)
@@ -673,7 +680,8 @@ class MainActivity : AppCompatActivity() {
         scope.launch {
             try {
                 val key = "${bookId}_$sectionId"
-                val hadithList = HadithCache.hadith[key] ?: run {
+                val cached = HadithCache.hadith[key]
+                val hadithList = if (cached != null) cached else {
                     val json = fetchJson(
                         "https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/$bookId/hadith/$sectionId.json",
                         "hadith_${bookId}_$sectionId"
@@ -707,7 +715,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Page-level Search
+    // Search
     // ─────────────────────────────────────────────────────────────
     private fun toggleSearch() {
         if (isSearchOpen) {
@@ -732,19 +740,28 @@ class MainActivity : AppCompatActivity() {
     private fun performSearch(query: String) {
         if (query.isBlank()) {
             when (val s = currentState) {
-                is PageState.Books -> HadithCache.books?.let { books ->
-                    recyclerView.adapter = BookAdapter(books) { loadSections(it.id, it.titleEn) }
-                }
-                is PageState.Sections -> HadithCache.sections[s.bookId]?.let { sections ->
-                    recyclerView.adapter = SectionAdapter(sections) { sec ->
-                        loadHadith(s.bookId, sec.id, s.bookTitle, sec.title)
+                is PageState.Books -> {
+                    HadithCache.books?.let { books ->
+                        allCurrentData = books
+                        recyclerView.adapter = BookAdapter(books) { loadSections(it.id, it.titleEn) }
                     }
                 }
-                is PageState.Hadith -> HadithCache.hadith["${s.bookId}_${s.sectionId}"]?.let { list ->
-                    recyclerView.adapter = HadithAdapter(list,
-                        onCopy = { h -> copyHadith(h, s.bookTitle, s.sectionTitle) },
-                        onShare = { h -> shareHadith(h, s.bookTitle, s.sectionTitle) }
-                    )
+                is PageState.Sections -> {
+                    HadithCache.sections[s.bookId]?.let { sections ->
+                        allCurrentData = sections
+                        recyclerView.adapter = SectionAdapter(sections) { sec ->
+                            loadHadith(s.bookId, sec.id, s.bookTitle, sec.title)
+                        }
+                    }
+                }
+                is PageState.Hadith -> {
+                    HadithCache.hadith["${s.bookId}_${s.sectionId}"]?.let { list ->
+                        allCurrentData = list
+                        recyclerView.adapter = HadithAdapter(list,
+                            onCopy = { h -> copyHadith(h, s.bookTitle, s.sectionTitle) },
+                            onShare = { h -> shareHadith(h, s.bookTitle, s.sectionTitle) }
+                        )
+                    }
                 }
             }
             return
@@ -781,109 +798,113 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Global Search
+    // Global Search - FIXED VERSION
     // ─────────────────────────────────────────────────────────────
     private fun openGlobalSearch() {
         isGlobalSearchOpen = true
         globalSearchOverlay.visibility = View.VISIBLE
         globalSearchInput.requestFocus()
+        // Clear previous results
+        globalSearchInput.setText("")
+        globalSearchStatus.text = "সার্চ করতে টাইপ করুন..."
+        showGlobalHint()
     }
 
     private fun closeGlobalSearch() {
         isGlobalSearchOpen = false
-        globalSearchHandler.removeCallbacks(globalSearchRunnable ?: Runnable {})
         globalSearchOverlay.visibility = View.GONE
         globalSearchInput.setText("")
         globalSearchStatus.text = "সার্চ করতে টাইপ করুন..."
-        showGlobalHint("🔍 সমস্ত হাদিস বই থেকে সার্চ করুন\n\nহাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে")
+        showGlobalHint()
     }
 
-    private fun showGlobalHint(msg: String) {
-        globalSearchHint.text = msg
+    private fun showGlobalHint() {
         globalSearchHint.visibility = View.VISIBLE
-        globalSearchRecycler.visibility = View.GONE
         globalSearchRecycler.adapter = null
     }
 
     private fun performGlobalSearchFromCache(query: String) {
+        // Get all books from cache
         val books = HadithCache.books
-        if (books == null || books.isEmpty()) {
-            globalSearchStatus.text = "⚠️ ক্যাশে কোনো ডাটা নেই। প্রথমে বই লিস্ট লোড করুন।"
-            showGlobalHint("প্রথমে বই লিস্ট থেকে কিছু হাদিস খুলুন, তারপর সার্চ করুন।")
+        if (books == null) {
+            globalSearchStatus.text = "⚠️ ক্যাশে কোনো বইয়ের ডাটা নেই। প্রথমে অনলাইনে ডাটা লোড করুন।"
+            globalSearchHint.visibility = View.VISIBLE
+            globalSearchRecycler.adapter = null
             return
         }
-
+        
         globalSearchHint.visibility = View.GONE
-        globalSearchRecycler.visibility = View.GONE
-        globalSearchStatus.text = "🔍 ক্যাশে অনুসন্ধান চলছে..."
+        globalSearchStatus.text = "⏳ ক্যাশে অনুসন্ধান করা হচ্ছে..."
+        val term = query.lowercase()
 
+        // Use a background thread for searching
         scope.launch(Dispatchers.Default) {
             val results = mutableListOf<GlobalSearchResult>()
-            val term = query.lowercase()
             var totalHadith = 0
             var booksSearched = 0
 
             for (book in books) {
                 val sections = HadithCache.sections[book.id] ?: continue
                 var bookHasData = false
-
+                
                 for (section in sections) {
                     val key = "${book.id}_${section.id}"
                     val hadithList = HadithCache.hadith[key] ?: continue
                     bookHasData = true
                     totalHadith += hadithList.size
-
-                    hadithList.filter { h ->
+                    
+                    // Search within this section's hadith
+                    val matchingHadith = hadithList.filter { h ->
                         h.hadithNumber.toString().contains(term) ||
                         h.title.lowercase().contains(term) ||
                         h.description.lowercase().contains(term) ||
                         h.descriptionAr.contains(term)
-                    }.forEach { h ->
-                        results.add(
-                            GlobalSearchResult(
-                                hadith = h,
-                                bookTitle = book.titleEn.ifBlank { book.titleAr },
-                                bookId = book.id,
-                                sectionTitle = section.title,
-                                sectionId = section.id
-                            )
-                        )
+                    }
+                    
+                    matchingHadith.forEach { h ->
+                        results.add(GlobalSearchResult(
+                            h, 
+                            book.titleEn.ifBlank { book.titleAr }, 
+                            book.id, 
+                            section.title, 
+                            section.id
+                        ))
                     }
                 }
-
+                
                 if (bookHasData) {
                     booksSearched++
-                    val snap = booksSearched
-                    val rSnap = results.size
+                    // Update UI with progress
                     withContext(Dispatchers.Main) {
-                        globalSearchStatus.text =
-                            "🔍 ${toBangla(snap)} টি বই দেখা হয়েছে — ${toBangla(rSnap)} টি ফলাফল"
+                        globalSearchStatus.text = "🔍 ${toBangla(booksSearched)} টি বই ক্যাশে অনুসন্ধান হয়েছে — ${toBangla(results.size)} টি ফলাফল"
                     }
                 }
             }
 
+            // Update UI with final results
             withContext(Dispatchers.Main) {
-                when {
-                    totalHadith == 0 -> {
-                        globalSearchStatus.text = "ক্যাশে হাদিস ডাটা নেই"
-                        showGlobalHint("😔 ক্যাশে কোনো হাদিস ডাটা নেই।\nপ্রথমে বই খুলুন, তারপর সার্চ করুন।")
+                if (results.isEmpty()) {
+                    if (totalHadith == 0) {
+                        globalSearchStatus.text = "ক্যাশে কোনো হাদিস ডাটা পাওয়া যায়নি"
+                        globalSearchHint.text = "😔 ক্যাশে কোনো হাদিস ডাটা নেই। ইন্টারনেট সংযোগ দিয়ে প্রথমে ডাটা ডাউনলোড করুন।"
+                    } else {
+                        globalSearchStatus.text = "মোট ${toBangla(totalHadith)} টি হাদিস ক্যাশে আছে — কোনো ফলাফল নেই"
+                        globalSearchHint.text = "😔 ক্যাশে কোনো হাদিস পাওয়া যায়নি"
                     }
-                    results.isEmpty() -> {
-                        globalSearchStatus.text =
-                            "মোট ${toBangla(totalHadith)} টি হাদিস দেখা হয়েছে — কোনো ফলাফল নেই"
-                        showGlobalHint("😔 \"$query\" এর জন্য কোনো হাদিস পাওয়া যায়নি।")
-                    }
-                    else -> {
-                        globalSearchStatus.text =
-                            "✅ ${toBangla(results.size)} টি হাদিস পাওয়া গেছে"
-                        globalSearchHint.visibility = View.GONE
-                        globalSearchRecycler.visibility = View.VISIBLE
-                        globalSearchRecycler.adapter = GlobalSearchAdapter(
-                            results,
-                            onCopy = { r -> copyHadith(r.hadith, r.bookTitle, r.sectionTitle) },
-                            onShare = { r -> shareHadith(r.hadith, r.bookTitle, r.sectionTitle) }
-                        )
-                    }
+                    globalSearchHint.visibility = View.VISIBLE
+                    globalSearchRecycler.adapter = null
+                } else {
+                    globalSearchStatus.text = "✅ ক্যাশে থেকে ${toBangla(results.size)} টি হাদিস পাওয়া গেছে"
+                    globalSearchHint.visibility = View.GONE
+                    globalSearchRecycler.adapter = GlobalSearchAdapter(results,
+                        onCopy = { r -> copyHadith(r.hadith, r.bookTitle, r.sectionTitle) },
+                        onShare = { r -> shareHadith(r.hadith, r.bookTitle, r.sectionTitle) },
+                        onItemClick = { r -> 
+                            // Navigate to the hadith when clicked
+                            closeGlobalSearch()
+                            loadHadith(r.bookId, r.sectionId, r.bookTitle, r.sectionTitle)
+                        }
+                    )
                 }
             }
         }
@@ -908,12 +929,7 @@ class MainActivity : AppCompatActivity() {
         startActivity(Intent.createChooser(intent, "শেয়ার করুন"))
     }
 
-    private fun buildHadithText(
-        hadith: HadithItem,
-        bookTitle: String,
-        sectionTitle: String,
-        withAppLink: Boolean
-    ): String {
+    private fun buildHadithText(hadith: HadithItem, bookTitle: String, sectionTitle: String, withAppLink: Boolean): String {
         return listOfNotNull(
             bookTitle.ifBlank { null },
             sectionTitle.ifBlank { null },
@@ -921,14 +937,12 @@ class MainActivity : AppCompatActivity() {
             hadith.title.ifBlank { null },
             hadith.descriptionAr.ifBlank { null },
             hadith.description.ifBlank { null },
-            if (withAppLink)
-                "অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia"
-            else null
+            if (withAppLink) "অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia" else null
         ).joinToString("\n")
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Back Navigation
+    // Back navigation
     // ─────────────────────────────────────────────────────────────
     private fun handleBack() {
         when {
@@ -960,59 +974,59 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Helpers
+    // Font / Drawing helpers
     // ─────────────────────────────────────────────────────────────
     private fun getBengaliTypeface() = try {
         android.graphics.Typeface.createFromAsset(assets, "fonts/SolaimanLipi.ttf")
-    } catch (e: Exception) { android.graphics.Typeface.DEFAULT }
+    } catch (e: Exception) {
+        android.graphics.Typeface.DEFAULT
+    }
 
     private fun getArabicTypeface() = try {
         android.graphics.Typeface.createFromAsset(assets, "fonts/noorehuda.ttf")
-    } catch (e: Exception) { android.graphics.Typeface.DEFAULT }
+    } catch (e: Exception) {
+        android.graphics.Typeface.DEFAULT
+    }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
-    private fun createRoundedBg(
-        fillColor: Int, strokeColor: Int, strokeWidth: Int, radius: Int
-    ): android.graphics.drawable.Drawable =
-        android.graphics.drawable.GradientDrawable().apply {
+    private fun createRoundedBg(fillColor: Int, strokeColor: Int, strokeWidth: Int, radius: Int): android.graphics.drawable.Drawable {
+        return android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.RECTANGLE
             setColor(fillColor)
             setStroke(strokeWidth, strokeColor)
             cornerRadius = radius.toFloat()
         }
+    }
 
-    private fun createRoundedSolid(
-        fillColor: Int, radius: Int
-    ): android.graphics.drawable.Drawable =
-        android.graphics.drawable.GradientDrawable().apply {
+    private fun createRoundedSolid(fillColor: Int, radius: Int): android.graphics.drawable.Drawable {
+        return android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.RECTANGLE
             setColor(fillColor)
             cornerRadius = radius.toFloat()
         }
+    }
 
     // ─────────────────────────────────────────────────────────────
-    // Book Adapter
+    // Adapters
     // ─────────────────────────────────────────────────────────────
+
     inner class BookAdapter(
         private val items: List<BookItem>,
         private val onClick: (BookItem) -> Unit
     ) : RecyclerView.Adapter<BookAdapter.VH>() {
 
-        inner class VH(val card: LinearLayout) : RecyclerView.ViewHolder(card)
+        inner class VH(val card: FrameLayout) : RecyclerView.ViewHolder(card)
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-            val card = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
+            val card = FrameLayout(this@MainActivity).apply {
                 layoutParams = RecyclerView.LayoutParams(
                     RecyclerView.LayoutParams.MATCH_PARENT,
                     RecyclerView.LayoutParams.WRAP_CONTENT
                 ).apply { bottomMargin = dp(14) }
-                background = createRoundedBg(
-                    Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(10)
-                )
+                background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(10))
                 elevation = dp(3).toFloat()
-                setPadding(dp(16), dp(14), dp(16), dp(14))
+                setPadding(dp(18), dp(16), dp(18), dp(14))
             }
             return VH(card)
         }
@@ -1020,42 +1034,35 @@ class MainActivity : AppCompatActivity() {
         override fun onBindViewHolder(holder: VH, position: Int) {
             val book = items[position]
             holder.card.removeAllViews()
-            holder.card.setOnClickListener { onClick(book) }
+
+            val innerLayout = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
 
             // English title
-            holder.card.addView(TextView(this@MainActivity).apply {
+            val titleEn = TextView(this@MainActivity).apply {
                 text = book.titleEn
                 textSize = 17f
                 setTextColor(Color.parseColor("#01837A"))
                 typeface = getBengaliTypeface()
+            }
+
+            // Arabic title
+            val titleAr = TextView(this@MainActivity).apply {
+                text = book.titleAr
+                textSize = 18f
+                setTextColor(Color.parseColor("#333333"))
+                typeface = getArabicTypeface()
+                gravity = Gravity.END
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-            })
-
-            // Arabic title
-            if (book.titleAr.isNotBlank()) {
-                holder.card.addView(TextView(this@MainActivity).apply {
-                    text = book.titleAr
-                    textSize = 18f
-                    setTextColor(Color.parseColor("#333333"))
-                    typeface = getArabicTypeface()
-                    gravity = Gravity.END
-                    layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                    ).apply { topMargin = dp(10); bottomMargin = dp(10) }
-                })
+                ).apply { topMargin = dp(10); bottomMargin = dp(10) }
             }
-
-            // Divider
-            holder.card.addView(View(this@MainActivity).apply {
-                setBackgroundColor(Color.parseColor("#DDDDDD"))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1)
-                )
-            })
 
             // Meta row
             val metaRow = LinearLayout(this@MainActivity).apply {
@@ -1065,47 +1072,56 @@ class MainActivity : AppCompatActivity() {
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply { topMargin = dp(8) }
             }
-            metaRow.addView(TextView(this@MainActivity).apply {
+            val divider = View(this@MainActivity).apply {
+                setBackgroundColor(Color.parseColor("#DDDDDD"))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1)
+                )
+            }
+            val sectionMeta = TextView(this@MainActivity).apply {
                 text = "📚 ${toBangla(book.totalSection)} টি অধ্যায়"
                 textSize = 13f
                 setTextColor(Color.parseColor("#666666"))
                 typeface = getBengaliTypeface()
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            })
-            metaRow.addView(TextView(this@MainActivity).apply {
+            }
+            val hadithMeta = TextView(this@MainActivity).apply {
                 text = "📖 ${toBangla(book.totalHadith)} টি হাদিস"
                 textSize = 13f
                 setTextColor(Color.parseColor("#666666"))
                 typeface = getBengaliTypeface()
-            })
-            holder.card.addView(metaRow)
+            }
+            metaRow.addView(sectionMeta)
+            metaRow.addView(hadithMeta)
+
+            innerLayout.addView(titleEn)
+            innerLayout.addView(titleAr)
+            innerLayout.addView(divider)
+            innerLayout.addView(metaRow)
+
+            holder.card.addView(innerLayout)
+            holder.card.setOnClickListener { onClick(book) }
         }
 
         override fun getItemCount() = items.size
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Section Adapter
-    // ─────────────────────────────────────────────────────────────
     inner class SectionAdapter(
         private val items: List<SectionItem>,
         private val onClick: (SectionItem) -> Unit
     ) : RecyclerView.Adapter<SectionAdapter.VH>() {
 
-        inner class VH(val card: LinearLayout) : RecyclerView.ViewHolder(card)
+        inner class VH(val card: FrameLayout) : RecyclerView.ViewHolder(card)
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-            val card = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
+            val card = FrameLayout(this@MainActivity).apply {
                 layoutParams = RecyclerView.LayoutParams(
                     RecyclerView.LayoutParams.MATCH_PARENT,
                     RecyclerView.LayoutParams.WRAP_CONTENT
                 ).apply { bottomMargin = dp(14) }
-                background = createRoundedBg(
-                    Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(10)
-                )
+                background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(10))
                 elevation = dp(3).toFloat()
-                setPadding(dp(16), dp(14), dp(16), dp(14))
+                setPadding(dp(18), dp(16), dp(18), dp(14))
             }
             return VH(card)
         }
@@ -1113,44 +1129,39 @@ class MainActivity : AppCompatActivity() {
         override fun onBindViewHolder(holder: VH, position: Int) {
             val section = items[position]
             holder.card.removeAllViews()
-            holder.card.setOnClickListener { onClick(section) }
 
-            // Title
-            holder.card.addView(TextView(this@MainActivity).apply {
+            val inner = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+
+            val titleView = TextView(this@MainActivity).apply {
                 text = section.title
                 textSize = 17f
                 setTextColor(Color.parseColor("#01837A"))
                 typeface = getBengaliTypeface()
+            }
+
+            val titleAr = TextView(this@MainActivity).apply {
+                text = section.titleAr
+                textSize = 18f
+                setTextColor(Color.parseColor("#333333"))
+                typeface = getArabicTypeface()
+                gravity = Gravity.END
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-            })
-
-            // Arabic title
-            if (section.titleAr.isNotBlank()) {
-                holder.card.addView(TextView(this@MainActivity).apply {
-                    text = section.titleAr
-                    textSize = 18f
-                    setTextColor(Color.parseColor("#333333"))
-                    typeface = getArabicTypeface()
-                    gravity = Gravity.END
-                    layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                    ).apply { topMargin = dp(10); bottomMargin = dp(10) }
-                })
+                ).apply { topMargin = dp(10); bottomMargin = dp(10) }
             }
 
-            // Divider
-            holder.card.addView(View(this@MainActivity).apply {
+            val divider = View(this@MainActivity).apply {
                 setBackgroundColor(Color.parseColor("#DDDDDD"))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1)
-                )
-            })
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
+            }
 
-            // Meta row
             val metaRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
@@ -1158,30 +1169,37 @@ class MainActivity : AppCompatActivity() {
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply { topMargin = dp(8) }
             }
-            metaRow.addView(TextView(this@MainActivity).apply {
+            val hadithMeta = TextView(this@MainActivity).apply {
                 text = "📖 মোট ${toBangla(section.totalHadith)} টি হাদিস"
                 textSize = 13f
                 setTextColor(Color.parseColor("#666666"))
                 typeface = getBengaliTypeface()
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            })
+            }
+            metaRow.addView(hadithMeta)
+
             if (section.rangeStart > 0 && section.rangeEnd > 0) {
-                metaRow.addView(TextView(this@MainActivity).apply {
+                val rangeMeta = TextView(this@MainActivity).apply {
                     text = "🔢 ব্যাপ্তি: ${toBangla(section.rangeStart)}-${toBangla(section.rangeEnd)}"
                     textSize = 13f
                     setTextColor(Color.parseColor("#666666"))
                     typeface = getBengaliTypeface()
-                })
+                }
+                metaRow.addView(rangeMeta)
             }
-            holder.card.addView(metaRow)
+
+            inner.addView(titleView)
+            inner.addView(titleAr)
+            inner.addView(divider)
+            inner.addView(metaRow)
+
+            holder.card.addView(inner)
+            holder.card.setOnClickListener { onClick(section) }
         }
 
         override fun getItemCount() = items.size
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Hadith Adapter
-    // ─────────────────────────────────────────────────────────────
     inner class HadithAdapter(
         private val items: List<HadithItem>,
         private val onCopy: (HadithItem) -> Unit,
@@ -1197,9 +1215,7 @@ class MainActivity : AppCompatActivity() {
                     RecyclerView.LayoutParams.MATCH_PARENT,
                     RecyclerView.LayoutParams.WRAP_CONTENT
                 ).apply { bottomMargin = dp(14) }
-                background = createRoundedBg(
-                    Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(10)
-                )
+                background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(10))
                 elevation = dp(3).toFloat()
                 setPadding(dp(16), dp(14), dp(16), dp(14))
             }
@@ -1210,7 +1226,7 @@ class MainActivity : AppCompatActivity() {
             val hadith = items[position]
             holder.card.removeAllViews()
 
-            // Header row: number badge + copy + share
+            // Header row
             val headerRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1219,36 +1235,43 @@ class MainActivity : AppCompatActivity() {
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 )
             }
-            headerRow.addView(TextView(this@MainActivity).apply {
+            val numberBadge = TextView(this@MainActivity).apply {
                 text = "হাদিস নং: ${toBangla(hadith.hadithNumber)}"
                 textSize = 13f
                 setTextColor(Color.WHITE)
                 typeface = getBengaliTypeface()
                 background = createRoundedSolid(Color.parseColor("#01837A"), dp(20))
                 setPadding(dp(12), dp(5), dp(12), dp(5))
-            })
-            headerRow.addView(View(this@MainActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val spacer = View(this@MainActivity).apply {
                 layoutParams = LinearLayout.LayoutParams(0, 0, 1f)
-            })
-            headerRow.addView(ImageView(this@MainActivity).apply {
+            }
+            val copyBtn = ImageView(this@MainActivity).apply {
                 setImageResource(R.drawable.copy)
                 setColorFilter(Color.parseColor("#01837A"))
-                layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
-                    marginEnd = dp(10)
-                }
+                layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(10) }
                 setOnClickListener { onCopy(hadith) }
-            })
-            headerRow.addView(ImageView(this@MainActivity).apply {
+            }
+            val shareBtn = ImageView(this@MainActivity).apply {
                 setImageResource(R.drawable.share)
                 setColorFilter(Color.parseColor("#01837A"))
                 layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
                 setOnClickListener { onShare(hadith) }
-            })
+            }
+            headerRow.addView(numberBadge)
+            headerRow.addView(spacer)
+            headerRow.addView(copyBtn)
+            headerRow.addView(shareBtn)
+
             holder.card.addView(headerRow)
 
             // Title
             if (hadith.title.isNotBlank()) {
-                holder.card.addView(TextView(this@MainActivity).apply {
+                val titleView = TextView(this@MainActivity).apply {
                     text = hadith.title
                     textSize = 17f
                     setTextColor(Color.parseColor("#01837A"))
@@ -1257,12 +1280,13 @@ class MainActivity : AppCompatActivity() {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(10) }
-                })
+                }
+                holder.card.addView(titleView)
             }
 
-            // Arabic
+            // Arabic text
             if (hadith.descriptionAr.isNotBlank()) {
-                holder.card.addView(TextView(this@MainActivity).apply {
+                val arView = TextView(this@MainActivity).apply {
                     text = hadith.descriptionAr
                     textSize = 20f
                     setTextColor(Color.parseColor("#333333"))
@@ -1272,12 +1296,13 @@ class MainActivity : AppCompatActivity() {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(12); bottomMargin = dp(6) }
-                })
+                }
+                holder.card.addView(arView)
             }
 
-            // Bengali
+            // Bengali description
             if (hadith.description.isNotBlank()) {
-                holder.card.addView(TextView(this@MainActivity).apply {
+                val descView = TextView(this@MainActivity).apply {
                     text = hadith.description
                     textSize = 15f
                     setTextColor(Color.parseColor("#444444"))
@@ -1286,7 +1311,8 @@ class MainActivity : AppCompatActivity() {
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { topMargin = dp(8) }
-                })
+                }
+                holder.card.addView(descView)
             }
         }
 
@@ -1294,7 +1320,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Global Search Result + Adapter
+    // Global Search Result model + Adapter
     // ─────────────────────────────────────────────────────────────
     data class GlobalSearchResult(
         val hadith: HadithItem,
@@ -1307,7 +1333,8 @@ class MainActivity : AppCompatActivity() {
     inner class GlobalSearchAdapter(
         private val items: List<GlobalSearchResult>,
         private val onCopy: (GlobalSearchResult) -> Unit,
-        private val onShare: (GlobalSearchResult) -> Unit
+        private val onShare: (GlobalSearchResult) -> Unit,
+        private val onItemClick: (GlobalSearchResult) -> Unit
     ) : RecyclerView.Adapter<GlobalSearchAdapter.VH>() {
 
         inner class VH(val card: LinearLayout) : RecyclerView.ViewHolder(card)
@@ -1319,9 +1346,7 @@ class MainActivity : AppCompatActivity() {
                     RecyclerView.LayoutParams.MATCH_PARENT,
                     RecyclerView.LayoutParams.WRAP_CONTENT
                 ).apply { bottomMargin = dp(12) }
-                background = createRoundedBg(
-                    Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(10)
-                )
+                background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(10))
                 elevation = dp(3).toFloat()
                 setPadding(dp(14), dp(12), dp(14), dp(12))
             }
@@ -1333,6 +1358,9 @@ class MainActivity : AppCompatActivity() {
             val hadith = result.hadith
             holder.card.removeAllViews()
 
+            // Make card clickable
+            holder.card.setOnClickListener { onItemClick(result) }
+
             // Header row
             val headerRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -1342,46 +1370,55 @@ class MainActivity : AppCompatActivity() {
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 )
             }
-            headerRow.addView(TextView(this@MainActivity).apply {
+            val numberBadge = TextView(this@MainActivity).apply {
                 text = "হাদিস নং: ${toBangla(hadith.hadithNumber)}"
                 textSize = 12f
                 setTextColor(Color.WHITE)
                 typeface = getBengaliTypeface()
                 background = createRoundedSolid(Color.parseColor("#01837A"), dp(20))
                 setPadding(dp(10), dp(4), dp(10), dp(4))
-            })
-            headerRow.addView(TextView(this@MainActivity).apply {
+            }
+            val bookLabel = TextView(this@MainActivity).apply {
                 text = result.bookTitle
                 textSize = 11f
                 setTextColor(Color.parseColor("#01837A"))
                 typeface = getBengaliTypeface()
-                background = createRoundedBg(
-                    Color.parseColor("#E8F8F7"), Color.parseColor("#01837A"), dp(1), dp(12)
-                )
+                background = createRoundedBg(Color.parseColor("#E8F8F7"), Color.parseColor("#01837A"), dp(1), dp(12))
                 setPadding(dp(8), dp(3), dp(8), dp(3))
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply { marginStart = dp(8) }
-                maxWidth = dp(130)
+                maxWidth = dp(120)
                 isSingleLine = true
                 ellipsize = android.text.TextUtils.TruncateAt.END
-            })
-            headerRow.addView(View(this@MainActivity).apply {
+            }
+            val spacer = View(this@MainActivity).apply {
                 layoutParams = LinearLayout.LayoutParams(0, 0, 1f)
-            })
-            headerRow.addView(ImageView(this@MainActivity).apply {
+            }
+            val copyBtn = ImageView(this@MainActivity).apply {
                 setImageResource(R.drawable.copy)
                 setColorFilter(Color.parseColor("#01837A"))
                 layoutParams = LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(8) }
-                setOnClickListener { onCopy(result) }
-            })
-            headerRow.addView(ImageView(this@MainActivity).apply {
+                setOnClickListener { 
+                    onCopy(result)
+                    true
+                }
+            }
+            val shareBtn = ImageView(this@MainActivity).apply {
                 setImageResource(R.drawable.share)
                 setColorFilter(Color.parseColor("#01837A"))
                 layoutParams = LinearLayout.LayoutParams(dp(22), dp(22))
-                setOnClickListener { onShare(result) }
-            })
+                setOnClickListener { 
+                    onShare(result)
+                    true
+                }
+            }
+            headerRow.addView(numberBadge)
+            headerRow.addView(bookLabel)
+            headerRow.addView(spacer)
+            headerRow.addView(copyBtn)
+            headerRow.addView(shareBtn)
             holder.card.addView(headerRow)
 
             if (hadith.title.isNotBlank()) {
@@ -1396,6 +1433,7 @@ class MainActivity : AppCompatActivity() {
                     ).apply { topMargin = dp(8) }
                 })
             }
+
             if (hadith.descriptionAr.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     text = hadith.descriptionAr
@@ -1409,6 +1447,7 @@ class MainActivity : AppCompatActivity() {
                     ).apply { topMargin = dp(10); bottomMargin = dp(6) }
                 })
             }
+
             if (hadith.description.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     text = hadith.description
@@ -1421,6 +1460,18 @@ class MainActivity : AppCompatActivity() {
                     ).apply { topMargin = dp(8) }
                 })
             }
+            
+            // Add section info
+            holder.card.addView(TextView(this@MainActivity).apply {
+                text = "📚 ${result.sectionTitle}"
+                textSize = 11f
+                setTextColor(Color.parseColor("#888888"))
+                typeface = getBengaliTypeface()
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8) }
+            })
         }
 
         override fun getItemCount() = items.size
