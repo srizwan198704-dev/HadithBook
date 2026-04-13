@@ -1,1105 +1,1438 @@
 package com.srizwan.islamipedia0
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Bundle
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.widget.Toast
+import android.os.Handler
+import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.view.animation.Animation
+import android.view.animation.TranslateAnimation
+import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.*
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
+import java.net.URL
 import java.security.MessageDigest
 
+// ─────────────────────────────────────────────────────────────────
+// Data Models
+// ─────────────────────────────────────────────────────────────────
+data class BookItem(
+    val id: Int,
+    val sequence: Int,
+    val titleEn: String,
+    val titleAr: String,
+    val totalSection: Int,
+    val totalHadith: Int
+)
+
+data class SectionItem(
+    val id: Int,
+    val sequence: Int,
+    val title: String,
+    val titleAr: String,
+    val totalHadith: Int,
+    val rangeStart: Int,
+    val rangeEnd: Int
+)
+
+data class HadithItem(
+    val hadithNumber: Int,
+    val title: String,
+    val descriptionAr: String,
+    val description: String
+)
+
+// ─────────────────────────────────────────────────────────────────
+// Page State
+// ─────────────────────────────────────────────────────────────────
+sealed class PageState {
+    object Books : PageState()
+    data class Sections(val bookId: Int, val bookTitle: String) : PageState()
+    data class Hadith(val bookId: Int, val sectionId: Int, val bookTitle: String, val sectionTitle: String) : PageState()
+}
+
+// ─────────────────────────────────────────────────────────────────
+// In-memory Cache
+// ─────────────────────────────────────────────────────────────────
+object HadithCache {
+    var books: List<BookItem>? = null
+    val sections = mutableMapOf<Int, List<SectionItem>>()
+    val hadith = mutableMapOf<String, List<HadithItem>>()
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Main Activity
+// ─────────────────────────────────────────────────────────────────
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var webView: WebView
     private val cacheDirName = "hadith_data"
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    // Views
+    private lateinit var toolbarLayout: LinearLayout
+    private lateinit var backButton: ImageView
+    private lateinit var toolbarTitleView: TextView
+    private lateinit var searchToggleBtn: ImageView
+    private lateinit var searchContainer: LinearLayout
+    private lateinit var searchInput: EditText
+    private lateinit var offlineIndicator: TextView
+    private lateinit var recyclerView: RecyclerView
+    private lateinit var statusView: View  // loading/error overlay
+    private lateinit var statusText: TextView
+    private lateinit var retryButton: Button
+    private lateinit var fabSearchBtn: FrameLayout
+    private lateinit var globalSearchOverlay: FrameLayout
+
+    // Global Search views
+    private lateinit var globalSearchInput: EditText
+    private lateinit var globalSearchStatus: TextView
+    private lateinit var globalSearchRecycler: RecyclerView
+    private lateinit var globalSearchHint: TextView
+
+    // State
+    private var currentState: PageState = PageState.Books
+    private var allCurrentData: List<Any> = emptyList()
+    private var isSearchOpen = false
+    private var isGlobalSearchOpen = false
+    private val searchHandler = Handler(Looper.getMainLooper())
+    private var searchRunnable: Runnable? = null
+    private val globalSearchHandler = Handler(Looper.getMainLooper())
+    private var globalSearchRunnable: Runnable? = null
+
+    // Marquee scroll
+    private val marqueeHandler = Handler(Looper.getMainLooper())
+    private var marqueeRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
 
         WindowCompat.setDecorFitsSystemWindows(window, true)
         val insetsController = WindowInsetsControllerCompat(window, window.decorView)
         insetsController.show(WindowInsetsCompat.Type.systemBars())
         insetsController.isAppearanceLightStatusBars = false
         insetsController.isAppearanceLightNavigationBars = false
-
         window.statusBarColor = Color.parseColor("#01837A")
         window.navigationBarColor = Color.BLACK
 
-        webView = findViewById(R.id.webView)
-        setupWebView()
+        val rootLayout = buildUI()
+        setContentView(rootLayout)
 
-        val cacheDir = File(filesDir, cacheDirName)
-        if (!cacheDir.exists()) cacheDir.mkdirs()
-
-        loadAppContent()
+        File(filesDir, cacheDirName).mkdirs()
+        loadBooks()
     }
 
-    private fun setupWebView() {
-        webView.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            allowFileAccess = true
-            allowContentAccess = true
-            setSupportZoom(false)
-            builtInZoomControls = false
-            displayZoomControls = false
-            useWideViewPort = true
-            loadWithOverviewMode = true
-            cacheMode = WebSettings.LOAD_DEFAULT
-            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+    // ─────────────────────────────────────────────────────────────
+    // UI Builder (pure code, no XML needed)
+    // ─────────────────────────────────────────────────────────────
+    private fun buildUI(): View {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(Color.parseColor("#F5F5F5"))
         }
 
-        webView.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView?, url: String?) {
-                super.onPageFinished(view, url)
+        // ── Toolbar ──
+        toolbarLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.parseColor("#01837A"))
+            setPadding(dp(12), dp(14), dp(12), dp(14))
+            elevation = dp(4).toFloat()
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        backButton = ImageView(this).apply {
+            setImageResource(R.drawable.back) // use your back drawable
+            layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
+            setColorFilter(Color.WHITE)
+            setOnClickListener { handleBack() }
+        }
+        toolbarTitleView = TextView(this).apply {
+            text = "হাদিস সমগ্র"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            typeface = getBengaliTypeface()
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
+            marqueeRepeatLimit = -1
+            isSelected = true
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(10), 0, dp(10), 0)
             }
-            override fun onReceivedError(
-                view: WebView?, request: WebResourceRequest?, error: WebResourceError?
-            ) {
-                super.onReceivedError(view, request, error)
-                if (!isNetworkAvailable()) showOfflineMessage()
-            }
         }
+        searchToggleBtn = ImageView(this).apply {
+            setImageResource(R.drawable.search)
+            layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
+            setColorFilter(Color.WHITE)
+            setOnClickListener { toggleSearch() }
+        }
+        toolbarLayout.addView(backButton)
+        toolbarLayout.addView(toolbarTitleView)
+        toolbarLayout.addView(searchToggleBtn)
+        root.addView(toolbarLayout)
 
-        webView.webChromeClient = WebChromeClient()
-        webView.addJavascriptInterface(AndroidJavaScriptInterface(), "AndroidApp")
-    }
-
-    private fun loadAppContent() {
-        val htmlFile = File(filesDir, "index.html")
-        htmlFile.writeText(generateMainHTML())
-        webView.loadUrl("file://${htmlFile.absolutePath}")
-    }
-
-    private fun generateMainHTML(): String {
-        return """
-<!DOCTYPE html>
-<html lang="bn">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=no">
-    <meta name="description" content="ইসলামী বিশ্বকোষ ও আল হাদিস - আল কুরআন, হাদিস, ইসলামী বই ও ইসলামী তথ্য ভান্ডারের সমাহার">
-    <title>হাদিস সমগ্র</title>
-    <style>
-        @font-face {
-            font-family: 'SolaimanLipi';
-            src: url('file:///android_asset/fonts/SolaimanLipi.ttf') format('truetype');
-            font-display: swap;
+        // ── Search bar ──
+        searchContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.WHITE)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            elevation = dp(3).toFloat()
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
         }
-        @font-face {
-            font-family: 'Noorehuda';
-            src: url('file:///android_asset/fonts/noorehuda.ttf') format('truetype');
-            font-display: swap;
-        }
-
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        body {
-            font-family: 'SolaimanLipi', sans-serif;
-            background: #f5f5f5;
-            color: #333;
-            line-height: 1.6;
-            -webkit-tap-highlight-color: transparent;
-        }
-
-        .toolbar {
-            background: #01837A;
-            color: white;
-            padding: 15px;
-            display: flex;
-            align-items: center;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-        .toolbar-icon { width: 24px; height: 24px; cursor: pointer; }
-        .toolbar-title {
-            flex: 1;
-            text-align: center;
-            font-size: 20px;
-            font-weight: bold;
-            margin: 0 15px;
-            overflow: hidden;
-            white-space: nowrap;
-        }
-        
-        /* Marquee Animation */
-        .toolbar-title span {
-            display: inline-block;
-            padding-left: 100%;
-            animation: marquee 12s linear infinite;
-            white-space: nowrap;
-        }
-        
-        @keyframes marquee {
-            0% { transform: translateX(0); }
-            100% { transform: translateX(-100%); }
-        }
-        
-        /* Only apply marquee when needed */
-        .toolbar-title.marquee-active span {
-            animation: marquee 12s linear infinite;
-        }
-        
-        .toolbar-title:not(.marquee-active) span {
-            animation: none;
-            padding-left: 0;
-        }
-
-        .search-container {
-            background: white;
-            padding: 10px 15px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            display: none;
-            position: sticky;
-            top: 60px;
-            z-index: 99;
-        }
-        .search-container.active { display: block; }
-        .search-input {
-            width: 100%;
-            padding: 10px 15px;
-            border: 2px solid #01837A;
-            border-radius: 25px;
-            font-family: 'SolaimanLipi', sans-serif;
-            font-size: 16px;
-            outline: none;
-        }
-
-        .content-container {
-            padding: 15px;
-            max-width: 800px;
-            margin: 0 auto;
-        }
-
-        .book-box {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 15px;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
-            border: 2px solid #01837A;
-            position: relative;
-            cursor: pointer;
-        }
-        .book-id-badge {
-            position: absolute;
-            top: -12px; left: -12px;
-            background: #01837A;
-            color: white;
-            width: 35px; height: 35px;
-            border-radius: 50%;
-            display: flex; align-items: center; justify-content: center;
-            font-weight: bold; font-size: 16px;
-        }
-        .book-title-en {
-            font-size: 18px; font-weight: bold;
-            color: #01837A; margin-bottom: 8px; padding-left: 20px;
-        }
-        .book-title-ar {
-            font-family: 'Noorehuda', sans-serif;
-            font-size: 18px; text-align: right;
-            color: #333; margin: 15px 0; direction: rtl;
-        }
-        .book-meta {
-            display: flex; justify-content: space-between;
-            padding-top: 10px; border-top: 1px dashed #ddd;
-            font-size: 14px; color: #666;
-        }
-
-        .hadith-box {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 15px;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
-            border: 2px solid #01837A;
-        }
-        .hadith-header {
-            display: flex; justify-content: space-between;
-            align-items: center; margin-bottom: 15px;
-        }
-        .hadith-number {
-            background: #01837A; color: white;
-            padding: 5px 15px; border-radius: 20px;
-            font-weight: bold; font-size: 14px;
-        }
-        .action-buttons { display: flex; gap: 10px; }
-        .action-icon { width: 24px; height: 24px; cursor: pointer; }
-        .hadith-title {
-            font-size: 18px; font-weight: bold;
-            color: #01837A; margin: 12px 0;
-        }
-        .hadith-description-ar {
-            font-family: 'Noorehuda', sans-serif;
-            font-size: 20px; color: #333;
-            margin: 15px 0; text-align: right; direction: rtl;
-        }
-        .hadith-description {
-            font-size: 16px; color: #444;
-            margin: 15px 0; text-align: justify;
-        }
-
-        .loading-state {
-            text-align: center; padding: 30px;
-            color: #01837A; font-size: 18px;
-        }
-        .error-state {
-            text-align: center; padding: 30px;
-            color: #e74c3c; font-size: 16px;
-        }
-        .offline-indicator {
-            background: #ff9800; color: white;
-            text-align: center; padding: 5px;
-            font-size: 12px; display: none;
-        }
-        .retry-button {
-            background: #01837A; color: white;
-            border: none; padding: 10px 20px;
-            border-radius: 25px;
-            font-family: 'SolaimanLipi', sans-serif;
-            font-size: 14px; margin-top: 15px; cursor: pointer;
-        }
-
-        /* ========== GLOBAL SEARCH POPUP ========== */
-        .global-search-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 999;
-        }
-        .global-search-overlay.active { display: flex; flex-direction: column; }
-
-        .global-search-popup {
-            background: white;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .global-search-header {
-            background: #01837A;
-            color: white;
-            padding: 15px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-shrink: 0;
-        }
-        .global-search-header-title {
-            font-size: 18px;
-            font-weight: bold;
-            flex: 1;
-        }
-        .global-search-close {
-            width: 24px; height: 24px;
-            cursor: pointer;
-        }
-
-        .global-search-input-wrap {
-            padding: 12px 15px;
-            background: #f0fffe;
-            border-bottom: 1px solid #ddd;
-            flex-shrink: 0;
-        }
-        .global-search-input {
-            width: 100%;
-            padding: 10px 15px;
-            border: 2px solid #01837A;
-            border-radius: 25px;
-            font-family: 'SolaimanLipi', sans-serif;
-            font-size: 16px;
-            outline: none;
-        }
-
-        .global-search-status {
-            padding: 8px 15px;
-            font-size: 13px;
-            color: #666;
-            background: #f9f9f9;
-            border-bottom: 1px solid #eee;
-            flex-shrink: 0;
-            min-height: 35px;
-        }
-
-        .global-search-results {
-            flex: 1;
-            overflow-y: auto;
-            padding: 10px 15px;
-        }
-
-        .global-search-hint {
-            text-align: center;
-            padding: 40px 20px;
-            color: #999;
-            font-size: 16px;
-        }
-
-        .gs-hadith-box {
-            background: white;
-            border-radius: 10px;
-            padding: 15px;
-            margin-bottom: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            border: 2px solid #01837A;
-        }
-        .gs-hadith-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-        .gs-hadith-number {
-            background: #01837A; color: white;
-            padding: 4px 12px; border-radius: 20px;
-            font-weight: bold; font-size: 13px;
-        }
-        .gs-book-label {
-            font-size: 12px;
-            color: #01837A;
-            background: #e8f8f7;
-            padding: 3px 10px;
-            border-radius: 12px;
-            border: 1px solid #01837A;
-        }
-        .gs-action-buttons { display: flex; gap: 8px; }
-        .gs-action-icon { width: 22px; height: 22px; cursor: pointer; }
-        .gs-hadith-title {
-            font-size: 16px; font-weight: bold;
-            color: #01837A; margin: 8px 0;
-        }
-        .gs-hadith-description-ar {
-            font-family: 'Noorehuda', sans-serif;
-            font-size: 18px; color: #333;
-            margin: 10px 0; text-align: right; direction: rtl;
-        }
-        .gs-hadith-description {
-            font-size: 15px; color: #444;
-            margin: 10px 0; text-align: justify;
-        }
-        .gs-loading {
-            text-align: center; padding: 20px;
-            color: #01837A; font-size: 16px;
-        }
-        .gs-no-result {
-            text-align: center; padding: 30px;
-            color: #999; font-size: 16px;
-        }
-
-        /* Floating global search button */
-        .fab-global-search {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 52px;
-            height: 52px;
-            background: #01837A;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            cursor: pointer;
-            z-index: 200;
-        }
-        .fab-global-search img { width: 26px; height: 26px; }
-    </style>
-</head>
-<body>
-    <div class="toolbar">
-        <img src="file:///android_asset/images/back.png" class="toolbar-icon" id="backButton" onclick="handleBack()" alt="Back">
-        <div class="toolbar-title" id="pageTitle"><span>হাদিস সমগ্র</span></div>
-        <img src="file:///android_asset/images/search.png" class="toolbar-icon" id="searchToggle" onclick="toggleSearch()" alt="Search">
-    </div>
-
-    <div class="search-container" id="searchContainer">
-        <input type="text" class="search-input" id="searchInput" placeholder="খুঁজুন..." oninput="handleSearch(this.value)">
-    </div>
-
-    <div class="offline-indicator" id="offlineIndicator">
-        ⚠️ অফলাইন মোড - ক্যাশে করা ডেটা দেখানো হচ্ছে
-    </div>
-
-    <div class="content-container" id="contentContainer">
-        <div class="loading-state">লোড হচ্ছে...</div>
-    </div>
-
-    <!-- Floating Global Search Button -->
-    <div class="fab-global-search" onclick="openGlobalSearch()" title="সম্পূর্ণ হাদিস সার্চ">
-        <img src="file:///android_asset/images/search.png" alt="Global Search">
-    </div>
-
-    <!-- Global Search Popup -->
-    <div class="global-search-overlay" id="globalSearchOverlay">
-        <div class="global-search-popup">
-            <div class="global-search-header">
-                <img src="file:///android_asset/images/back.png" class="global-search-close" onclick="closeGlobalSearch()" alt="Close">
-                <div class="global-search-header-title">সম্পূর্ণ হাদিস সার্চ</div>
-            </div>
-            <div class="global-search-input-wrap">
-                <input type="text" class="global-search-input" id="globalSearchInput"
-                    placeholder="হাদিস নম্বর, শিরোনাম বা বাংলা/আরবি লিখুন..."
-                    oninput="handleGlobalSearch(this.value)">
-            </div>
-            <div class="global-search-status" id="globalSearchStatus">
-                সার্চ করতে টাইপ করুন...
-            </div>
-            <div class="global-search-results" id="globalSearchResults">
-                <div class="global-search-hint">
-                    🔍 সমস্ত হাদিস বই থেকে সার্চ করুন<br><br>
-                    <small>হাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে</small>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        let currentState = {
-            page: 'books',
-            bookId: null,
-            sectionId: null,
-            bookTitle: '',
-            sectionTitle: ''
-        };
-
-        let cachedData = {
-            books: null,
-            sections: {},
-            hadith: {}
-        };
-
-        let currentDisplayData = [];
-
-        // ====== Global Search State ======
-        let globalSearchTimeout = null;
-        let allBooksData = null;
-        let globalSearchActive = false;
-        let globalSearchAbortFlag = false;
-
-        const toBanglaNumber = (num) => {
-            if (num === null || num === undefined || isNaN(num)) return '০';
-            const banglaDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
-            return num.toString().replace(/\d/g, digit => banglaDigits[digit]);
-        };
-
-        const safeString = (str, fallback) => str || fallback || 'তথ্য নেই';
-
-        // Marquee function for toolbar title
-        function updateToolbar(title, showBack) {
-            const titleElement = document.getElementById('pageTitle');
-            const spanElement = titleElement.querySelector('span');
-            spanElement.textContent = title;
-            
-            // Check if text needs marquee (longer than container)
-            setTimeout(() => {
-                const containerWidth = titleElement.clientWidth;
-                const textWidth = spanElement.scrollWidth;
-                if (textWidth > containerWidth) {
-                    titleElement.classList.add('marquee-active');
-                } else {
-                    titleElement.classList.remove('marquee-active');
+        searchInput = EditText(this).apply {
+            hint = "খুঁজুন..."
+            typeface = getBengaliTypeface()
+            textSize = 16f
+            setHintTextColor(Color.parseColor("#999999"))
+            background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(24))
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            addTextChangedListener(object : TextWatcher {
+                override fun afterTextChanged(s: Editable?) {
+                    searchHandler.removeCallbacks(searchRunnable ?: return)
+                    searchRunnable = Runnable { performSearch(s?.toString() ?: "") }
+                    searchHandler.postDelayed(searchRunnable!!, 300)
                 }
-            }, 10);
-            
-            document.getElementById('backButton').style.display = 'block';
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            })
+        }
+        searchContainer.addView(searchInput)
+        root.addView(searchContainer)
+
+        // ── Offline Indicator ──
+        offlineIndicator = TextView(this).apply {
+            text = "⚠️ অফলাইন মোড - ক্যাশে করা ডেটা দেখানো হচ্ছে"
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            typeface = getBengaliTypeface()
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.parseColor("#FF9800"))
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        root.addView(offlineIndicator)
+
+        // ── Content frame (RecyclerView + status overlay) ──
+        val contentFrame = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+            )
         }
 
-        const showLoading = () => {
-            document.getElementById('contentContainer').innerHTML = '<div class="loading-state">লোড হচ্ছে...</div>';
-        };
+        recyclerView = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@MainActivity)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            setPadding(dp(12), dp(12), dp(12), dp(80))
+            clipToPadding = false
+        }
+        contentFrame.addView(recyclerView)
 
-        const showError = (message, retryCallback) => {
-            const container = document.getElementById('contentContainer');
-            let buttonHtml = '';
-            if (retryCallback) {
-                buttonHtml = '<button class="retry-button" onclick="(' + retryCallback.toString() + ')()">আবার চেষ্টা করুন</button>';
+        // Status overlay
+        val statusOverlay = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.parseColor("#F5F5F5"))
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            visibility = View.GONE
+        }
+        statusText = TextView(this).apply {
+            textSize = 17f
+            typeface = getBengaliTypeface()
+            gravity = Gravity.CENTER
+            setPadding(dp(24), 0, dp(24), 0)
+        }
+        retryButton = Button(this).apply {
+            text = "আবার চেষ্টা করুন"
+            typeface = getBengaliTypeface()
+            setTextColor(Color.WHITE)
+            background = createRoundedSolid(Color.parseColor("#01837A"), dp(24))
+            setPadding(dp(20), dp(10), dp(20), dp(10))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(16) }
+            visibility = View.GONE
+        }
+        statusOverlay.addView(statusText)
+        statusOverlay.addView(retryButton)
+        statusView = statusOverlay
+        contentFrame.addView(statusOverlay)
+
+        // ── FAB Global Search ──
+        fabSearchBtn = FrameLayout(this).apply {
+            val size = dp(52)
+            layoutParams = FrameLayout.LayoutParams(size, size, Gravity.BOTTOM or Gravity.END).apply {
+                setMargins(0, 0, dp(20), dp(20))
             }
-            container.innerHTML = '<div class="error-state">❌ ' + message + buttonHtml + '</div>';
-        };
+            background = createRoundedSolid(Color.parseColor("#01837A"), size / 2)
+            elevation = dp(6).toFloat()
+            setOnClickListener { openGlobalSearch() }
+        }
+        val fabIcon = ImageView(this).apply {
+            setImageResource(R.drawable.search)
+            setColorFilter(Color.WHITE)
+            layoutParams = FrameLayout.LayoutParams(dp(26), dp(26), Gravity.CENTER)
+        }
+        fabSearchBtn.addView(fabIcon)
+        contentFrame.addView(fabSearchBtn)
 
-        async function fetchData(url, cacheKey) {
-            try {
-                if (typeof AndroidApp !== 'undefined') {
-                    const cached = AndroidApp.getCachedData(cacheKey);
-                    if (cached && cached.length > 0) {
-                        document.getElementById('offlineIndicator').style.display = 'block';
-                        return JSON.parse(cached);
+        root.addView(contentFrame)
+
+        // ── Global Search Overlay ──
+        globalSearchOverlay = buildGlobalSearchOverlay()
+        val decorFrame = FrameLayout(this).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+        decorFrame.addView(root)
+        decorFrame.addView(globalSearchOverlay)
+        return decorFrame
+    }
+
+    private fun buildGlobalSearchOverlay(): FrameLayout {
+        val overlay = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(Color.parseColor("#80000000"))
+            visibility = View.GONE
+        }
+
+        val popup = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.WHITE)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        // Header
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.parseColor("#01837A"))
+            setPadding(dp(12), dp(14), dp(12), dp(14))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val closeBtn = ImageView(this).apply {
+            setImageResource(R.drawable.back)
+            setColorFilter(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
+            setOnClickListener { closeGlobalSearch() }
+        }
+        val headerTitle = TextView(this).apply {
+            text = "সম্পূর্ণ হাদিস সার্চ"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            typeface = getBengaliTypeface()
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(10), 0, 0, 0)
+            }
+        }
+        header.addView(closeBtn)
+        header.addView(headerTitle)
+
+        // Search input
+        val inputWrap = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.parseColor("#F0FFFE"))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        globalSearchInput = EditText(this).apply {
+            hint = "হাদিস নম্বর, শিরোনাম বা বাংলা/আরবি লিখুন..."
+            typeface = getBengaliTypeface()
+            textSize = 16f
+            setHintTextColor(Color.parseColor("#999999"))
+            background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(24))
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            addTextChangedListener(object : TextWatcher {
+                override fun afterTextChanged(s: Editable?) {
+                    val q = s?.toString() ?: ""
+                    if (q.trim().length < 2) {
+                        globalSearchStatus.text = "কমপক্ষে ২টি অক্ষর লিখুন..."
+                        showGlobalHint()
+                        return
                     }
+                    globalSearchHandler.removeCallbacks(globalSearchRunnable ?: return)
+                    globalSearchRunnable = Runnable { performGlobalSearchFromCache(q.trim()) }
+                    globalSearchHandler.postDelayed(globalSearchRunnable!!, 400)
                 }
-                const response = await fetch(url);
-                if (!response.ok) throw new Error('Network error');
-                const data = await response.json();
-                if (typeof AndroidApp !== 'undefined') {
-                    AndroidApp.cacheData(cacheKey, JSON.stringify(data));
-                }
-                document.getElementById('offlineIndicator').style.display = 'none';
-                return data;
-            } catch (error) {
-                if (typeof AndroidApp !== 'undefined') {
-                    const cached = AndroidApp.getCachedData(cacheKey);
-                    if (cached && cached.length > 0) {
-                        document.getElementById('offlineIndicator').style.display = 'block';
-                        return JSON.parse(cached);
-                    }
-                }
-                throw error;
-            }
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            })
+        }
+        inputWrap.addView(globalSearchInput)
+
+        // Status bar
+        globalSearchStatus = TextView(this).apply {
+            text = "সার্চ করতে টাইপ করুন..."
+            textSize = 13f
+            setTextColor(Color.parseColor("#666666"))
+            typeface = getBengaliTypeface()
+            setBackgroundColor(Color.parseColor("#F9F9F9"))
+            setPadding(dp(15), dp(8), dp(15), dp(8))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
         }
 
-        async function loadBooks() {
-            currentState = { page: 'books', bookId: null, sectionId: null, bookTitle: '', sectionTitle: '' };
-            updateToolbar('হাদিস সমগ্র', false);
-            window.scrollTo(0, 0);
-            showLoading();
-            try {
-                const data = await fetchData(
-                    'https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/book-title.json',
-                    'hadith_books_list'
-                );
-                cachedData.books = data;
-                allBooksData = data;
-                currentDisplayData = data;
-                renderBooks(data);
-            } catch (error) {
-                showError('বই লোড করতে সমস্যা হয়েছে', loadBooks);
-            }
+        // Results RecyclerView
+        val resultsFrame = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+            )
         }
-
-        function renderBooks(books) {
-            const container = document.getElementById('contentContainer');
-            if (!books || books.length === 0) {
-                container.innerHTML = '<div class="error-state">কোন বই পাওয়া যায়নি</div>';
-                return;
-            }
-            container.innerHTML = '';
-            books.sort((a, b) => (a.sequence || 0) - (b.sequence || 0)).forEach(book => {
-                const box = document.createElement('div');
-                box.className = 'book-box';
-                box.onclick = () => loadSections(book.id, safeString(book.title, 'বই'));
-                box.innerHTML =
-                    '<div class="book-id-badge">' + toBanglaNumber(book.sequence || 0) + '</div>' +
-                    '<div class="book-title-en">' + safeString(book.title_en, 'Title') + '</div>' +
-                    '<div class="book-title-ar">' + safeString(book.title_ar, 'العنوان') + '</div>' +
-                    '<div class="book-meta">' +
-                        '<span>📚 ' + toBanglaNumber(book.total_section || 0) + ' টি অধ্যায়</span>' +
-                        '<span>📖 ' + toBanglaNumber(book.total_hadith || 0) + ' টি হাদিস</span>' +
-                    '</div>';
-                container.appendChild(box);
-            });
+        globalSearchRecycler = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@MainActivity)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            setPadding(dp(12), dp(10), dp(12), dp(12))
+            clipToPadding = false
         }
-
-        async function loadSections(bookId, bookTitle) {
-            currentState = { page: 'sections', bookId: bookId, sectionId: null, bookTitle: bookTitle, sectionTitle: '' };
-            updateToolbar(bookTitle, true);
-            window.scrollTo(0, 0);
-            showLoading();
-            try {
-                const cacheKey = 'sections_' + bookId;
-                let data = cachedData.sections[bookId];
-                if (!data) {
-                    data = await fetchData(
-                        'https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/' + bookId + '/title.json',
-                        cacheKey
-                    );
-                    cachedData.sections[bookId] = data;
-                }
-                currentDisplayData = data;
-                renderSections(data);
-            } catch (error) {
-                showError('অধ্যায় লোড করতে সমস্যা হয়েছে', () => loadSections(bookId, bookTitle));
-            }
+        globalSearchHint = TextView(this).apply {
+            text = "🔍 সমস্ত হাদিস বই থেকে সার্চ করুন\n\nহাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে"
+            textSize = 15f
+            typeface = getBengaliTypeface()
+            setTextColor(Color.parseColor("#999999"))
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(40), dp(24), dp(40))
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP
+            )
         }
+        resultsFrame.addView(globalSearchRecycler)
+        resultsFrame.addView(globalSearchHint)
 
-        function renderSections(sections) {
-            const container = document.getElementById('contentContainer');
-            if (!sections || sections.length === 0) {
-                container.innerHTML = '<div class="error-state">কোন অধ্যায় পাওয়া যায়নি</div>';
-                return;
-            }
-            container.innerHTML = '';
-            sections.sort((a, b) => (a.sequence || 0) - (b.sequence || 0)).forEach(section => {
-                const box = document.createElement('div');
-                box.className = 'book-box';
-                box.onclick = () => loadHadith(currentState.bookId, section.id, safeString(section.title, 'অধ্যায়'));
-                let rangeText = '';
-                if (section.range_start && section.range_end) {
-                    rangeText = '<span>🔢 ব্যাপ্তি: ' + toBanglaNumber(section.range_start) + '-' + toBanglaNumber(section.range_end) + '</span>';
-                }
-                box.innerHTML =
-                    '<div class="book-id-badge">' + toBanglaNumber(section.sequence || 0) + '</div>' +
-                    '<div class="book-title-en">' + safeString(section.title, 'অধ্যায়') + '</div>' +
-                    '<div class="book-title-ar">' + safeString(section.title_ar, 'الباب') + '</div>' +
-                    '<div class="book-meta">' +
-                        '<span>📖 মোট ' + toBanglaNumber(section.total_hadith || 0) + ' টি হাদিস</span>' +
-                        rangeText +
-                    '</div>';
-                container.appendChild(box);
-            });
-        }
-
-        async function loadHadith(bookId, sectionId, sectionTitle) {
-            currentState = {
-                page: 'hadith', bookId: bookId, sectionId: sectionId,
-                bookTitle: currentState.bookTitle, sectionTitle: sectionTitle
-            };
-            updateToolbar(sectionTitle, true);
-            window.scrollTo(0, 0);
-            showLoading();
-            try {
-                const cacheKey = 'hadith_' + bookId + '_' + sectionId;
-                const dataKey = bookId + '_' + sectionId;
-                let data = cachedData.hadith[dataKey];
-                if (!data) {
-                    data = await fetchData(
-                        'https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/' + bookId + '/hadith/' + sectionId + '.json',
-                        cacheKey
-                    );
-                    cachedData.hadith[dataKey] = data;
-                }
-                currentDisplayData = data;
-                renderHadith(data);
-            } catch (error) {
-                showError('হাদিস লোড করতে সমস্যা হয়েছে', () => loadHadith(bookId, sectionId, sectionTitle));
-            }
-        }
-
-        function renderHadith(hadithList) {
-            const container = document.getElementById('contentContainer');
-            if (!hadithList || hadithList.length === 0) {
-                container.innerHTML = '<div class="error-state">কোন হাদিস পাওয়া যায়নি</div>';
-                return;
-            }
-            container.innerHTML = '';
-            hadithList.sort((a, b) => (a.hadith_number || 0) - (b.hadith_number || 0)).forEach(hadith => {
-                const box = document.createElement('div');
-                box.className = 'hadith-box';
-                box.innerHTML =
-                    '<div class="hadith-header">' +
-                        '<span class="hadith-number">হাদিস নং: ' + toBanglaNumber(hadith.hadith_number) + '</span>' +
-                        '<span class="action-buttons">' +
-                            '<img src="file:///android_asset/images/copy.png" class="action-icon" onclick="event.stopPropagation(); copyHadith(' + hadith.hadith_number + ')" alt="Copy">' +
-                            '<img src="file:///android_asset/images/share.png" class="action-icon" onclick="event.stopPropagation(); shareHadith(' + hadith.hadith_number + ')" alt="Share">' +
-                        '</span>' +
-                    '</div>' +
-                    '<div class="hadith-title">' + safeString(hadith.title, '') + '</div>' +
-                    '<div class="hadith-description-ar">' + safeString(hadith.description_ar, '') + '</div>' +
-                    '<div class="hadith-description">' + safeString(hadith.description, '') + '</div>';
-                container.appendChild(box);
-            });
-        }
-
-        function findHadithByNumber(number) {
-            return currentDisplayData.find(h => h.hadith_number == number);
-        }
-
-        function buildText(parts) {
-            return parts.filter(p => p && p.trim() !== '').join('\n');
-        }
-
-        function copyHadith(hadithNumber) {
-            const hadith = findHadithByNumber(hadithNumber);
-            if (!hadith) return;
-            const text = buildText([
-                currentState.bookTitle, currentState.sectionTitle,
-                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
-                hadith.title || '', hadith.description_ar || '', hadith.description || ''
-            ]);
-            if (typeof AndroidApp !== 'undefined') {
-                AndroidApp.copyToClipboard(text);
-                AndroidApp.showToast('কপি করা হয়েছে!');
-            }
-        }
-
-        function shareHadith(hadithNumber) {
-            const hadith = findHadithByNumber(hadithNumber);
-            if (!hadith) return;
-            const text = buildText([
-                currentState.bookTitle, currentState.sectionTitle,
-                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
-                hadith.title || '', hadith.description_ar || '', hadith.description || '',
-                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
-            ]);
-            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
-        }
-
-        // ====== Page-level search ======
-        let searchTimeout;
-        function handleSearch(query) {
-            clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(() => performSearch(query), 300);
-        }
-
-        function performSearch(query) {
-            if (!query || query.trim() === '') {
-                if (currentState.page === 'books') renderBooks(cachedData.books);
-                else if (currentState.page === 'sections') renderSections(cachedData.sections[currentState.bookId]);
-                else if (currentState.page === 'hadith') renderHadith(cachedData.hadith[currentState.bookId + '_' + currentState.sectionId]);
-                return;
-            }
-            const searchTerm = query.toLowerCase().trim();
-            if (currentState.page === 'books' && cachedData.books) {
-                renderBooks(cachedData.books.filter(book =>
-                    (book.title_en || '').toLowerCase().includes(searchTerm) ||
-                    (book.title_ar || '').includes(searchTerm) ||
-                    (book.title || '').toLowerCase().includes(searchTerm)
-                ));
-            } else if (currentState.page === 'sections') {
-                const sections = cachedData.sections[currentState.bookId];
-                if (sections) renderSections(sections.filter(section =>
-                    (section.title || '').toLowerCase().includes(searchTerm) ||
-                    (section.title_ar || '').includes(searchTerm)
-                ));
-            } else if (currentState.page === 'hadith') {
-                const hadithList = cachedData.hadith[currentState.bookId + '_' + currentState.sectionId];
-                if (hadithList) renderHadith(hadithList.filter(hadith =>
-                    hadith.hadith_number.toString().includes(searchTerm) ||
-                    (hadith.title || '').toLowerCase().includes(searchTerm) ||
-                    (hadith.description || '').toLowerCase().includes(searchTerm) ||
-                    (hadith.description_ar || '').toLowerCase().includes(searchTerm)
-                ));
-            }
-        }
-
-        function toggleSearch() {
-            const searchContainer = document.getElementById('searchContainer');
-            const searchInput = document.getElementById('searchInput');
-            if (searchContainer.classList.contains('active')) {
-                searchContainer.classList.remove('active');
-                searchInput.value = '';
-                handleSearch('');
-            } else {
-                searchContainer.classList.add('active');
-                searchInput.focus();
-            }
-        }
-
-        function isSearchOpen() {
-            return document.getElementById('searchContainer').classList.contains('active');
-        }
-
-        function closeSearch() {
-            const searchContainer = document.getElementById('searchContainer');
-            const searchInput = document.getElementById('searchInput');
-            searchContainer.classList.remove('active');
-            searchInput.value = '';
-            handleSearch('');
-        }
-
-        function handleBack() {
-            if (isSearchOpen()) {
-                closeSearch();
-                return;
-            }
-            if (currentState.page === 'hadith') {
-                loadSections(currentState.bookId, currentState.bookTitle);
-            } else if (currentState.page === 'sections') {
-                loadBooks();
-            } else {
-                if (typeof AndroidApp !== 'undefined') {
-                    AndroidApp.finishActivity();
-                }
-            }
-        }
-
-        // ====== GLOBAL SEARCH POPUP (CACHE ONLY) ======
-        function openGlobalSearch() {
-            globalSearchActive = true;
-            document.getElementById('globalSearchOverlay').classList.add('active');
-            setTimeout(() => document.getElementById('globalSearchInput').focus(), 300);
-        }
-
-        function closeGlobalSearch() {
-            globalSearchActive = false;
-            globalSearchAbortFlag = true;
-            document.getElementById('globalSearchOverlay').classList.remove('active');
-            document.getElementById('globalSearchInput').value = '';
-            document.getElementById('globalSearchStatus').textContent = 'সার্চ করতে টাইপ করুন...';
-            document.getElementById('globalSearchResults').innerHTML =
-                '<div class="global-search-hint">🔍 সমস্ত হাদিস বই থেকে সার্চ করুন<br><br><small>হাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে</small></div>';
-        }
-
-        function handleGlobalSearch(query) {
-            clearTimeout(globalSearchTimeout);
-            if (!query || query.trim().length < 2) {
-                document.getElementById('globalSearchStatus').textContent = 'কমপক্ষে ২টি অক্ষর লিখুন...';
-                document.getElementById('globalSearchResults').innerHTML =
-                    '<div class="global-search-hint">🔍 সমস্ত হাদিস বই থেকে সার্চ করুন<br><br><small>হাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে</small></div>';
-                return;
-            }
-            document.getElementById('globalSearchStatus').textContent = '⏳ ক্যাশে অনুসন্ধান করা হচ্ছে...';
-            globalSearchTimeout = setTimeout(() => performGlobalSearchFromCache(query.trim()), 400);
-        }
-
-        // Search ONLY from cache - No network requests
-        function performGlobalSearchFromCache(query) {
-            globalSearchAbortFlag = false;
-            const resultsDiv = document.getElementById('globalSearchResults');
-            const statusDiv = document.getElementById('globalSearchStatus');
-
-            if (!cachedData.books) {
-                statusDiv.textContent = '⚠️ কোনো ক্যাশে ডাটা নেই। প্রথমে অনলাইনে ডাটা লোড করুন।';
-                resultsDiv.innerHTML = '<div class="gs-no-result">ক্যাশে কোনো ডাটা পাওয়া যায়নি। ইন্টারনেট সংযোগ দিয়ে অ্যাপটি প্রথমবার চালু করুন।</div>';
-                return;
-            }
-
-            resultsDiv.innerHTML = '<div class="gs-loading">🔍 ক্যাশে অনুসন্ধান চলছে...</div>';
-            const searchTerm = query.toLowerCase();
-            const allResults = [];
-            let totalHadithCount = 0;
-            let booksSearched = 0;
-
-            // Search through cached data only
-            for (const book of cachedData.books) {
-                if (globalSearchAbortFlag) return;
-                
-                const sections = cachedData.sections[book.id];
-                if (!sections) continue;
-                
-                let bookHasData = false;
-                for (const section of sections) {
-                    if (globalSearchAbortFlag) return;
-                    
-                    const dataKey = book.id + '_' + section.id;
-                    const hadithList = cachedData.hadith[dataKey];
-                    
-                    if (hadithList) {
-                        bookHasData = true;
-                        totalHadithCount += hadithList.length;
-                        
-                        const matched = hadithList.filter(hadith =>
-                            (hadith.hadith_number || '').toString().includes(searchTerm) ||
-                            (hadith.title || '').toLowerCase().includes(searchTerm) ||
-                            (hadith.description || '').toLowerCase().includes(searchTerm) ||
-                            (hadith.description_ar || '').includes(searchTerm)
-                        );
-
-                        matched.forEach(h => {
-                            allResults.push({
-                                hadith: h,
-                                bookTitle: safeString(book.title, book.title_en || 'বই'),
-                                bookId: book.id,
-                                sectionTitle: safeString(section.title, 'অধ্যায়'),
-                                sectionId: section.id
-                            });
-                        });
-                    }
-                }
-                
-                if (bookHasData) {
-                    booksSearched++;
-                    statusDiv.textContent = '🔍 ' + toBanglaNumber(booksSearched) + ' টি বই ক্যাশে অনুসন্ধান হয়েছে — ' + toBanglaNumber(allResults.length) + ' টি ফলাফল';
-                }
-            }
-
-            if (globalSearchAbortFlag) return;
-
-            if (allResults.length === 0) {
-                if (totalHadithCount === 0) {
-                    resultsDiv.innerHTML = '<div class="gs-no-result">😔 ক্যাশে কোনো হাদিস ডাটা নেই। ইন্টারনেট সংযোগ দিয়ে প্রথমে ডাটা ডাউনলোড করুন।</div>';
-                    statusDiv.textContent = 'ক্যাশে ডাটা পাওয়া যায়নি';
-                } else {
-                    resultsDiv.innerHTML = '<div class="gs-no-result">😔 ক্যাশে কোনো হাদিস পাওয়া যায়নি</div>';
-                    statusDiv.textContent = 'মোট ' + toBanglaNumber(totalHadithCount) + ' টি হাদিস ক্যাশে আছে — কোনো ফলাফল নেই';
-                }
-            } else {
-                statusDiv.textContent = '✅ ক্যাশে থেকে ' + toBanglaNumber(allResults.length) + ' টি হাদিস পাওয়া গেছে';
-                renderGlobalResults(allResults);
-            }
-        }
-
-        function renderGlobalResults(results) {
-            const resultsDiv = document.getElementById('globalSearchResults');
-            resultsDiv.innerHTML = '';
-            results.forEach(item => {
-                const { hadith, bookTitle, bookId, sectionTitle, sectionId } = item;
-                const box = document.createElement('div');
-                box.className = 'gs-hadith-box';
-                box.innerHTML =
-                    '<div class="gs-hadith-header">' +
-                        '<span class="gs-hadith-number">হাদিস নং: ' + toBanglaNumber(hadith.hadith_number) + '</span>' +
-                        '<span class="gs-book-label">' + bookTitle + '</span>' +
-                        '<span class="gs-action-buttons">' +
-                            '<img src="file:///android_asset/images/copy.png" class="gs-action-icon" onclick="gsCopy(' + hadith.hadith_number + ',\'' + escapeJs(bookTitle) + '\',\'' + escapeJs(sectionTitle) + '\')" alt="Copy">' +
-                            '<img src="file:///android_asset/images/share.png" class="gs-action-icon" onclick="gsShare(' + hadith.hadith_number + ',\'' + escapeJs(bookTitle) + '\',\'' + escapeJs(sectionTitle) + '\')" alt="Share">' +
-                        '</span>' +
-                    '</div>' +
-                    (hadith.title ? '<div class="gs-hadith-title">' + hadith.title + '</div>' : '') +
-                    (hadith.description_ar ? '<div class="gs-hadith-description-ar">' + hadith.description_ar + '</div>' : '') +
-                    (hadith.description ? '<div class="gs-hadith-description">' + hadith.description + '</div>' : '');
-                resultsDiv.appendChild(box);
-            });
-        }
-
-        function escapeJs(str) {
-            return (str || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
-        }
-
-        function gsFindInAllCache(hadithNumber) {
-            for (const key in cachedData.hadith) {
-                const found = cachedData.hadith[key].find(h => h.hadith_number == hadithNumber);
-                if (found) return found;
-            }
-            return null;
-        }
-
-        function gsGetTextFromResult(hadithNumber, bookTitle, sectionTitle) {
-            const hadith = gsFindInAllCache(hadithNumber);
-            if (!hadith) return '';
-            return buildText([
-                bookTitle, sectionTitle,
-                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
-                hadith.title || '', hadith.description_ar || '', hadith.description || ''
-            ]);
-        }
-
-        function gsShare(hadithNumber, bookTitle, sectionTitle) {
-            const hadith = gsFindInAllCache(hadithNumber);
-            if (!hadith) return;
-            const text = buildText([
-                bookTitle, sectionTitle,
-                'হাদিস নং: ' + toBanglaNumber(hadith.hadith_number),
-                hadith.title || '', hadith.description_ar || '', hadith.description || '',
-                'অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia'
-            ]);
-            if (typeof AndroidApp !== 'undefined') AndroidApp.shareText(text);
-        }
-
-        function gsCopy(hadithNumber, bookTitle, sectionTitle) {
-            const text = gsGetTextFromResult(hadithNumber, bookTitle, sectionTitle);
-            if (!text) return;
-            if (typeof AndroidApp !== 'undefined') {
-                AndroidApp.copyToClipboard(text);
-                AndroidApp.showToast('কপি করা হয়েছে!');
-            }
-        }
-
-        document.addEventListener('DOMContentLoaded', () => {
-            loadBooks();
-        });
-    </script>
-</body>
-</html>
-        """.trimIndent()
+        popup.addView(header)
+        popup.addView(inputWrap)
+        popup.addView(globalSearchStatus)
+        popup.addView(resultsFrame)
+        overlay.addView(popup)
+        return overlay
     }
 
-    inner class AndroidJavaScriptInterface {
+    // ─────────────────────────────────────────────────────────────
+    // Toolbar helpers
+    // ─────────────────────────────────────────────────────────────
+    private fun updateToolbar(title: String) {
+        toolbarTitleView.text = title
+    }
 
-        @android.webkit.JavascriptInterface
-        fun finishActivity() {
-            runOnUiThread { finish() }
-        }
+    // ─────────────────────────────────────────────────────────────
+    // Loading / Error states
+    // ─────────────────────────────────────────────────────────────
+    private fun showLoading() {
+        recyclerView.visibility = View.GONE
+        statusView.visibility = View.VISIBLE
+        statusText.text = "লোড হচ্ছে..."
+        statusText.setTextColor(Color.parseColor("#01837A"))
+        retryButton.visibility = View.GONE
+    }
 
-        @android.webkit.JavascriptInterface
-        fun getCachedData(key: String): String {
-            return try {
-                val cacheFile = File(filesDir, "$cacheDirName/${getCacheFileName(key)}")
-                if (cacheFile.exists()) cacheFile.readText() else ""
-            } catch (e: Exception) {
-                e.printStackTrace(); ""
-            }
-        }
-
-        @android.webkit.JavascriptInterface
-        fun cacheData(key: String, data: String) {
-            try {
-                val cacheDir = File(filesDir, cacheDirName)
-                if (!cacheDir.exists()) cacheDir.mkdirs()
-                File(cacheDir, getCacheFileName(key)).writeText(data)
-            } catch (e: Exception) { e.printStackTrace() }
-        }
-
-        @android.webkit.JavascriptInterface
-        fun showToast(message: String) {
-            runOnUiThread { Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show() }
-        }
-
-        @android.webkit.JavascriptInterface
-        fun copyToClipboard(text: String) {
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("হাদিস", text))
-        }
-
-        @android.webkit.JavascriptInterface
-        fun shareText(text: String) {
-            runOnUiThread {
-                val sendIntent = android.content.Intent().apply {
-                    action = android.content.Intent.ACTION_SEND
-                    putExtra(android.content.Intent.EXTRA_TEXT, text)
-                    type = "text/plain"
-                }
-                startActivity(android.content.Intent.createChooser(sendIntent, "শেয়ার করুন"))
-            }
-        }
-
-        private fun getCacheFileName(key: String): String {
-            val md = MessageDigest.getInstance("MD5")
-            return md.digest(key.toByteArray()).joinToString("") { "%02x".format(it) } + ".json"
+    private fun showError(message: String, retry: (() -> Unit)? = null) {
+        recyclerView.visibility = View.GONE
+        statusView.visibility = View.VISIBLE
+        statusText.text = "❌ $message"
+        statusText.setTextColor(Color.parseColor("#E74C3C"))
+        if (retry != null) {
+            retryButton.visibility = View.VISIBLE
+            retryButton.setOnClickListener { retry() }
+        } else {
+            retryButton.visibility = View.GONE
         }
     }
 
+    private fun showContent() {
+        statusView.visibility = View.GONE
+        recyclerView.visibility = View.VISIBLE
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Network + Cache helpers
+    // ─────────────────────────────────────────────────────────────
     private fun isNetworkAvailable(): Boolean {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = cm.activeNetwork ?: return false
-        val capabilities = cm.getNetworkCapabilities(network) ?: return false
-        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-               capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        val cap = cm.getNetworkCapabilities(network) ?: return false
+        return cap.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+               cap.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
-    private fun showOfflineMessage() {
-        webView.evaluateJavascript(
-            "document.getElementById('offlineIndicator').style.display = 'block';", null
-        )
+    private fun cacheFileName(key: String): String {
+        val md = MessageDigest.getInstance("MD5")
+        return md.digest(key.toByteArray()).joinToString("") { "%02x".format(it) } + ".json"
     }
 
-    override fun onBackPressed() {
-        webView.evaluateJavascript("""
-            (function() {
-                if (typeof globalSearchActive !== 'undefined' && globalSearchActive) {
-                    return JSON.stringify({action: 'closeGlobalSearch'});
-                }
-                if (typeof isSearchOpen === 'function' && isSearchOpen()) {
-                    return JSON.stringify({action: 'closeSearch'});
-                }
-                if (typeof currentState !== 'undefined') {
-                    return JSON.stringify({action: 'navigate', page: currentState.page});
-                }
-                return JSON.stringify({action: 'finish'});
-            })();
-        """.trimIndent()) { result ->
+    private fun getCachedData(key: String): String? {
+        val f = File(File(filesDir, cacheDirName), cacheFileName(key))
+        return if (f.exists()) f.readText() else null
+    }
+
+    private fun cacheData(key: String, data: String) {
+        val dir = File(filesDir, cacheDirName)
+        if (!dir.exists()) dir.mkdirs()
+        File(dir, cacheFileName(key)).writeText(data)
+    }
+
+    private suspend fun fetchJson(url: String, cacheKey: String): String {
+        getCachedData(cacheKey)?.let {
+            offlineIndicator.visibility = View.VISIBLE
+            return it
+        }
+        return withContext(Dispatchers.IO) {
             try {
-                val clean = result.replace("\\\"", "\"").trim('"')
-                when {
-                    clean.contains("\"action\":\"closeGlobalSearch\"") ->
-                        webView.evaluateJavascript("closeGlobalSearch()", null)
-                    clean.contains("\"action\":\"closeSearch\"") ->
-                        webView.evaluateJavascript("closeSearch()", null)
-                    clean.contains("\"page\":\"books\"") ->
-                        super.onBackPressed()
-                    clean.contains("\"page\":\"sections\"") || clean.contains("\"page\":\"hadith\"") ->
-                        webView.evaluateJavascript("handleBack()", null)
-                    else ->
-                        super.onBackPressed()
-                }
+                val text = URL(url).readText()
+                cacheData(cacheKey, text)
+                withContext(Dispatchers.Main) { offlineIndicator.visibility = View.GONE }
+                text
             } catch (e: Exception) {
-                super.onBackPressed()
+                getCachedData(cacheKey)?.also {
+                    withContext(Dispatchers.Main) { offlineIndicator.visibility = View.VISIBLE }
+                } ?: throw e
             }
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Number → Bangla helper
+    // ─────────────────────────────────────────────────────────────
+    private fun toBangla(num: Int): String {
+        val d = charArrayOf('০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯')
+        return num.toString().map { if (it.isDigit()) d[it - '0'] else it }.joinToString("")
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Load Books
+    // ─────────────────────────────────────────────────────────────
+    private fun loadBooks() {
+        currentState = PageState.Books
+        updateToolbar("হাদিস সমগ্র")
+        recyclerView.scrollToPosition(0)
+        showLoading()
+        scope.launch {
+            try {
+                val json = fetchJson(
+                    "https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/book-title.json",
+                    "hadith_books_list"
+                )
+                val books = parseBooks(json)
+                HadithCache.books = books
+                allCurrentData = books
+                showContent()
+                recyclerView.adapter = BookAdapter(books) { book ->
+                    loadSections(book.id, book.titleEn)
+                }
+            } catch (e: Exception) {
+                showError("বই লোড করতে সমস্যা হয়েছে") { loadBooks() }
+            }
+        }
+    }
+
+    private fun parseBooks(json: String): List<BookItem> {
+        val arr = JSONArray(json)
+        return (0 until arr.length()).map { arr.getJSONObject(it) }.map { o ->
+            BookItem(
+                id = o.optInt("id"),
+                sequence = o.optInt("sequence"),
+                titleEn = o.optString("title_en", o.optString("title", "Book")),
+                titleAr = o.optString("title_ar", ""),
+                totalSection = o.optInt("total_section"),
+                totalHadith = o.optInt("total_hadith")
+            )
+        }.sortedBy { it.sequence }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Load Sections
+    // ─────────────────────────────────────────────────────────────
+    private fun loadSections(bookId: Int, bookTitle: String) {
+        currentState = PageState.Sections(bookId, bookTitle)
+        updateToolbar(bookTitle)
+        recyclerView.scrollToPosition(0)
+        showLoading()
+        scope.launch {
+            try {
+                val cached = HadithCache.sections[bookId]
+                val sections = if (cached != null) cached else {
+                    val json = fetchJson(
+                        "https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/$bookId/title.json",
+                        "sections_$bookId"
+                    )
+                    parseSections(json).also { HadithCache.sections[bookId] = it }
+                }
+                allCurrentData = sections
+                showContent()
+                recyclerView.adapter = SectionAdapter(sections) { section ->
+                    loadHadith(bookId, section.id, bookTitle, section.title)
+                }
+            } catch (e: Exception) {
+                showError("অধ্যায় লোড করতে সমস্যা হয়েছে") { loadSections(bookId, bookTitle) }
+            }
+        }
+    }
+
+    private fun parseSections(json: String): List<SectionItem> {
+        val arr = JSONArray(json)
+        return (0 until arr.length()).map { arr.getJSONObject(it) }.map { o ->
+            SectionItem(
+                id = o.optInt("id"),
+                sequence = o.optInt("sequence"),
+                title = o.optString("title", "অধ্যায়"),
+                titleAr = o.optString("title_ar", ""),
+                totalHadith = o.optInt("total_hadith"),
+                rangeStart = o.optInt("range_start"),
+                rangeEnd = o.optInt("range_end")
+            )
+        }.sortedBy { it.sequence }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Load Hadith
+    // ─────────────────────────────────────────────────────────────
+    private fun loadHadith(bookId: Int, sectionId: Int, bookTitle: String, sectionTitle: String) {
+        currentState = PageState.Hadith(bookId, sectionId, bookTitle, sectionTitle)
+        updateToolbar(sectionTitle)
+        recyclerView.scrollToPosition(0)
+        showLoading()
+        scope.launch {
+            try {
+                val key = "${bookId}_$sectionId"
+                val cached = HadithCache.hadith[key]
+                val hadithList = if (cached != null) cached else {
+                    val json = fetchJson(
+                        "https://cdn.jsdelivr.net/gh/SunniPedia/sunnipedia@main/hadith-books/book/$bookId/hadith/$sectionId.json",
+                        "hadith_${bookId}_$sectionId"
+                    )
+                    parseHadith(json).also { HadithCache.hadith[key] = it }
+                }
+                allCurrentData = hadithList
+                showContent()
+                recyclerView.adapter = HadithAdapter(hadithList,
+                    onCopy = { h -> copyHadith(h, bookTitle, sectionTitle) },
+                    onShare = { h -> shareHadith(h, bookTitle, sectionTitle) }
+                )
+            } catch (e: Exception) {
+                showError("হাদিস লোড করতে সমস্যা হয়েছে") {
+                    loadHadith(bookId, sectionId, bookTitle, sectionTitle)
+                }
+            }
+        }
+    }
+
+    private fun parseHadith(json: String): List<HadithItem> {
+        val arr = JSONArray(json)
+        return (0 until arr.length()).map { arr.getJSONObject(it) }.map { o ->
+            HadithItem(
+                hadithNumber = o.optInt("hadith_number"),
+                title = o.optString("title", ""),
+                descriptionAr = o.optString("description_ar", ""),
+                description = o.optString("description", "")
+            )
+        }.sortedBy { it.hadithNumber }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Search
+    // ─────────────────────────────────────────────────────────────
+    private fun toggleSearch() {
+        if (isSearchOpen) {
+            isSearchOpen = false
+            searchContainer.visibility = View.GONE
+            searchInput.setText("")
+            performSearch("")
+        } else {
+            isSearchOpen = true
+            searchContainer.visibility = View.VISIBLE
+            searchInput.requestFocus()
+        }
+    }
+
+    private fun closeSearch() {
+        isSearchOpen = false
+        searchContainer.visibility = View.GONE
+        searchInput.setText("")
+        performSearch("")
+    }
+
+    private fun performSearch(query: String) {
+        if (query.isBlank()) {
+            when (val s = currentState) {
+                is PageState.Books -> {
+                    HadithCache.books?.let { books ->
+                        allCurrentData = books
+                        recyclerView.adapter = BookAdapter(books) { loadSections(it.id, it.titleEn) }
+                    }
+                }
+                is PageState.Sections -> {
+                    HadithCache.sections[s.bookId]?.let { sections ->
+                        allCurrentData = sections
+                        recyclerView.adapter = SectionAdapter(sections) { sec ->
+                            loadHadith(s.bookId, sec.id, s.bookTitle, sec.title)
+                        }
+                    }
+                }
+                is PageState.Hadith -> {
+                    HadithCache.hadith["${s.bookId}_${s.sectionId}"]?.let { list ->
+                        allCurrentData = list
+                        recyclerView.adapter = HadithAdapter(list,
+                            onCopy = { h -> copyHadith(h, s.bookTitle, s.sectionTitle) },
+                            onShare = { h -> shareHadith(h, s.bookTitle, s.sectionTitle) }
+                        )
+                    }
+                }
+            }
+            return
+        }
+        val term = query.lowercase().trim()
+        when (val s = currentState) {
+            is PageState.Books -> {
+                val filtered = HadithCache.books?.filter {
+                    it.titleEn.lowercase().contains(term) || it.titleAr.contains(term)
+                } ?: emptyList()
+                recyclerView.adapter = BookAdapter(filtered) { loadSections(it.id, it.titleEn) }
+            }
+            is PageState.Sections -> {
+                val filtered = HadithCache.sections[s.bookId]?.filter {
+                    it.title.lowercase().contains(term) || it.titleAr.contains(term)
+                } ?: emptyList()
+                recyclerView.adapter = SectionAdapter(filtered) { sec ->
+                    loadHadith(s.bookId, sec.id, s.bookTitle, sec.title)
+                }
+            }
+            is PageState.Hadith -> {
+                val filtered = HadithCache.hadith["${s.bookId}_${s.sectionId}"]?.filter {
+                    it.hadithNumber.toString().contains(term) ||
+                    it.title.lowercase().contains(term) ||
+                    it.description.lowercase().contains(term) ||
+                    it.descriptionAr.contains(term)
+                } ?: emptyList()
+                recyclerView.adapter = HadithAdapter(filtered,
+                    onCopy = { h -> copyHadith(h, s.bookTitle, s.sectionTitle) },
+                    onShare = { h -> shareHadith(h, s.bookTitle, s.sectionTitle) }
+                )
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Global Search
+    // ─────────────────────────────────────────────────────────────
+    private fun openGlobalSearch() {
+        isGlobalSearchOpen = true
+        globalSearchOverlay.visibility = View.VISIBLE
+        globalSearchInput.requestFocus()
+    }
+
+    private fun closeGlobalSearch() {
+        isGlobalSearchOpen = false
+        globalSearchOverlay.visibility = View.GONE
+        globalSearchInput.setText("")
+        globalSearchStatus.text = "সার্চ করতে টাইপ করুন..."
+        showGlobalHint()
+    }
+
+    private fun showGlobalHint() {
+        globalSearchHint.visibility = View.VISIBLE
+        globalSearchRecycler.adapter = null
+    }
+
+    private fun performGlobalSearchFromCache(query: String) {
+        val books = HadithCache.books
+        if (books == null) {
+            globalSearchStatus.text = "⚠️ ক্যাশে কোনো ডাটা নেই। প্রথমে অনলাইনে ডাটা লোড করুন।"
+            globalSearchHint.visibility = View.VISIBLE
+            return
+        }
+        globalSearchHint.visibility = View.GONE
+        globalSearchStatus.text = "⏳ ক্যাশে অনুসন্ধান করা হচ্ছে..."
+        val term = query.lowercase()
+
+        scope.launch(Dispatchers.Default) {
+            val results = mutableListOf<GlobalSearchResult>()
+            var totalHadith = 0
+            var booksSearched = 0
+
+            for (book in books) {
+                val sections = HadithCache.sections[book.id] ?: continue
+                var bookHasData = false
+                for (section in sections) {
+                    val key = "${book.id}_${section.id}"
+                    val hadithList = HadithCache.hadith[key] ?: continue
+                    bookHasData = true
+                    totalHadith += hadithList.size
+                    hadithList.filter { h ->
+                        h.hadithNumber.toString().contains(term) ||
+                        h.title.lowercase().contains(term) ||
+                        h.description.lowercase().contains(term) ||
+                        h.descriptionAr.contains(term)
+                    }.forEach { h ->
+                        results.add(GlobalSearchResult(h, book.titleEn.ifBlank { book.titleAr }, book.id, section.title, section.id))
+                    }
+                }
+                if (bookHasData) {
+                    booksSearched++
+                    val snap = booksSearched
+                    val rSnap = results.size
+                    withContext(Dispatchers.Main) {
+                        globalSearchStatus.text = "🔍 ${toBangla(snap)} টি বই ক্যাশে অনুসন্ধান হয়েছে — ${toBangla(rSnap)} টি ফলাফল"
+                    }
+                }
+            }
+
+            withContext(Dispatchers.Main) {
+                if (results.isEmpty()) {
+                    globalSearchStatus.text = if (totalHadith == 0)
+                        "ক্যাশে ডাটা পাওয়া যায়নি"
+                    else
+                        "মোট ${toBangla(totalHadith)} টি হাদিস ক্যাশে আছে — কোনো ফলাফল নেই"
+                    globalSearchHint.text = if (totalHadith == 0)
+                        "😔 ক্যাশে কোনো হাদিস ডাটা নেই। ইন্টারনেট সংযোগ দিয়ে প্রথমে ডাটা ডাউনলোড করুন।"
+                    else
+                        "😔 ক্যাশে কোনো হাদিস পাওয়া যায়নি"
+                    globalSearchHint.visibility = View.VISIBLE
+                } else {
+                    globalSearchStatus.text = "✅ ক্যাশে থেকে ${toBangla(results.size)} টি হাদিস পাওয়া গেছে"
+                    globalSearchHint.visibility = View.GONE
+                    globalSearchRecycler.adapter = GlobalSearchAdapter(results,
+                        onCopy = { r -> copyHadith(r.hadith, r.bookTitle, r.sectionTitle) },
+                        onShare = { r -> shareHadith(r.hadith, r.bookTitle, r.sectionTitle) }
+                    )
+                }
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Copy / Share
+    // ─────────────────────────────────────────────────────────────
+    private fun copyHadith(hadith: HadithItem, bookTitle: String, sectionTitle: String) {
+        val text = buildHadithText(hadith, bookTitle, sectionTitle, withAppLink = false)
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("হাদিস", text))
+        Toast.makeText(this, "কপি করা হয়েছে!", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun shareHadith(hadith: HadithItem, bookTitle: String, sectionTitle: String) {
+        val text = buildHadithText(hadith, bookTitle, sectionTitle, withAppLink = true)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        startActivity(Intent.createChooser(intent, "শেয়ার করুন"))
+    }
+
+    private fun buildHadithText(hadith: HadithItem, bookTitle: String, sectionTitle: String, withAppLink: Boolean): String {
+        return listOfNotNull(
+            bookTitle.ifBlank { null },
+            sectionTitle.ifBlank { null },
+            "হাদিস নং: ${toBangla(hadith.hadithNumber)}",
+            hadith.title.ifBlank { null },
+            hadith.descriptionAr.ifBlank { null },
+            hadith.description.ifBlank { null },
+            if (withAppLink) "অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia" else null
+        ).joinToString("\n")
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Back navigation
+    // ─────────────────────────────────────────────────────────────
+    private fun handleBack() {
+        when {
+            isSearchOpen -> closeSearch()
+            isGlobalSearchOpen -> closeGlobalSearch()
+            currentState is PageState.Hadith -> {
+                val s = currentState as PageState.Hadith
+                loadSections(s.bookId, s.bookTitle)
+            }
+            currentState is PageState.Sections -> loadBooks()
+            else -> finish()
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        handleBack()
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Lifecycle
+    // ─────────────────────────────────────────────────────────────
+    override fun onDestroy() {
+        super.onDestroy()
+        scope.cancel()
+        marqueeHandler.removeCallbacksAndMessages(null)
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Font / Drawing helpers
+    // ─────────────────────────────────────────────────────────────
+    private fun getBengaliTypeface() = try {
+        android.graphics.Typeface.createFromAsset(assets, "fonts/SolaimanLipi.ttf")
+    } catch (e: Exception) {
+        android.graphics.Typeface.DEFAULT
+    }
+
+    private fun getArabicTypeface() = try {
+        android.graphics.Typeface.createFromAsset(assets, "fonts/noorehuda.ttf")
+    } catch (e: Exception) {
+        android.graphics.Typeface.DEFAULT
+    }
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
+    private fun createRoundedBg(fillColor: Int, strokeColor: Int, strokeWidth: Int, radius: Int): android.graphics.drawable.Drawable {
+        return android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            setColor(fillColor)
+            setStroke(strokeWidth, strokeColor)
+            cornerRadius = radius.toFloat()
+        }
+    }
+
+    private fun createRoundedSolid(fillColor: Int, radius: Int): android.graphics.drawable.Drawable {
+        return android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            setColor(fillColor)
+            cornerRadius = radius.toFloat()
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Adapters
+    // ─────────────────────────────────────────────────────────────
+
+    inner class BookAdapter(
+        private val items: List<BookItem>,
+        private val onClick: (BookItem) -> Unit
+    ) : RecyclerView.Adapter<BookAdapter.VH>() {
+
+        inner class VH(val card: FrameLayout) : RecyclerView.ViewHolder(card)
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
+            val card = FrameLayout(this@MainActivity).apply {
+                layoutParams = RecyclerView.LayoutParams(
+                    RecyclerView.LayoutParams.MATCH_PARENT,
+                    RecyclerView.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(14) }
+                background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(10))
+                elevation = dp(3).toFloat()
+                setPadding(dp(18), dp(16), dp(18), dp(14))
+            }
+            return VH(card)
+        }
+
+        override fun onBindViewHolder(holder: VH, position: Int) {
+            val book = items[position]
+            holder.card.removeAllViews()
+
+            val innerLayout = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+
+            // Badge
+            val badge = TextView(this@MainActivity).apply {
+                text = toBangla(book.sequence)
+                textSize = 15f
+                setTextColor(Color.WHITE)
+                typeface = getBengaliTypeface()
+                gravity = Gravity.CENTER
+                background = createRoundedSolid(Color.parseColor("#01837A"), dp(18))
+                layoutParams = FrameLayout.LayoutParams(dp(36), dp(36)).apply {
+                    topMargin = -dp(18)
+                    leftMargin = -dp(18)
+                }
+            }
+
+            // English title
+            val titleEn = TextView(this@MainActivity).apply {
+                text = book.titleEn
+                textSize = 17f
+                setTextColor(Color.parseColor("#01837A"))
+                typeface = getBengaliTypeface()
+                setPadding(dp(20), 0, 0, 0)
+            }
+
+            // Arabic title
+            val titleAr = TextView(this@MainActivity).apply {
+                text = book.titleAr
+                textSize = 18f
+                setTextColor(Color.parseColor("#333333"))
+                typeface = getArabicTypeface()
+                gravity = Gravity.END
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(10); bottomMargin = dp(10) }
+            }
+
+            // Meta row
+            val metaRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8) }
+            }
+            val divider = View(this@MainActivity).apply {
+                setBackgroundColor(Color.parseColor("#DDDDDD"))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1)
+                )
+            }
+            val sectionMeta = TextView(this@MainActivity).apply {
+                text = "📚 ${toBangla(book.totalSection)} টি অধ্যায়"
+                textSize = 13f
+                setTextColor(Color.parseColor("#666666"))
+                typeface = getBengaliTypeface()
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val hadithMeta = TextView(this@MainActivity).apply {
+                text = "📖 ${toBangla(book.totalHadith)} টি হাদিস"
+                textSize = 13f
+                setTextColor(Color.parseColor("#666666"))
+                typeface = getBengaliTypeface()
+            }
+            metaRow.addView(sectionMeta)
+            metaRow.addView(hadithMeta)
+
+            innerLayout.addView(titleEn)
+            innerLayout.addView(titleAr)
+            innerLayout.addView(divider)
+            innerLayout.addView(metaRow)
+
+            holder.card.addView(innerLayout)
+            holder.card.addView(badge)
+            holder.card.setOnClickListener { onClick(book) }
+        }
+
+        override fun getItemCount() = items.size
+    }
+
+    inner class SectionAdapter(
+        private val items: List<SectionItem>,
+        private val onClick: (SectionItem) -> Unit
+    ) : RecyclerView.Adapter<SectionAdapter.VH>() {
+
+        inner class VH(val card: FrameLayout) : RecyclerView.ViewHolder(card)
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
+            val card = FrameLayout(this@MainActivity).apply {
+                layoutParams = RecyclerView.LayoutParams(
+                    RecyclerView.LayoutParams.MATCH_PARENT,
+                    RecyclerView.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(14) }
+                background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(10))
+                elevation = dp(3).toFloat()
+                setPadding(dp(18), dp(16), dp(18), dp(14))
+            }
+            return VH(card)
+        }
+
+        override fun onBindViewHolder(holder: VH, position: Int) {
+            val section = items[position]
+            holder.card.removeAllViews()
+
+            val inner = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+
+            val badge = TextView(this@MainActivity).apply {
+                text = toBangla(section.sequence)
+                textSize = 15f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                background = createRoundedSolid(Color.parseColor("#01837A"), dp(18))
+                layoutParams = FrameLayout.LayoutParams(dp(36), dp(36)).apply {
+                    topMargin = -dp(18); leftMargin = -dp(18)
+                }
+            }
+
+            val titleView = TextView(this@MainActivity).apply {
+                text = section.title
+                textSize = 17f
+                setTextColor(Color.parseColor("#01837A"))
+                typeface = getBengaliTypeface()
+                setPadding(dp(20), 0, 0, 0)
+            }
+
+            val titleAr = TextView(this@MainActivity).apply {
+                text = section.titleAr
+                textSize = 18f
+                setTextColor(Color.parseColor("#333333"))
+                typeface = getArabicTypeface()
+                gravity = Gravity.END
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(10); bottomMargin = dp(10) }
+            }
+
+            val divider = View(this@MainActivity).apply {
+                setBackgroundColor(Color.parseColor("#DDDDDD"))
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
+            }
+
+            val metaRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8) }
+            }
+            val hadithMeta = TextView(this@MainActivity).apply {
+                text = "📖 মোট ${toBangla(section.totalHadith)} টি হাদিস"
+                textSize = 13f
+                setTextColor(Color.parseColor("#666666"))
+                typeface = getBengaliTypeface()
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            metaRow.addView(hadithMeta)
+
+            if (section.rangeStart > 0 && section.rangeEnd > 0) {
+                val rangeMeta = TextView(this@MainActivity).apply {
+                    text = "🔢 ব্যাপ্তি: ${toBangla(section.rangeStart)}-${toBangla(section.rangeEnd)}"
+                    textSize = 13f
+                    setTextColor(Color.parseColor("#666666"))
+                    typeface = getBengaliTypeface()
+                }
+                metaRow.addView(rangeMeta)
+            }
+
+            inner.addView(titleView)
+            inner.addView(titleAr)
+            inner.addView(divider)
+            inner.addView(metaRow)
+
+            holder.card.addView(inner)
+            holder.card.addView(badge)
+            holder.card.setOnClickListener { onClick(section) }
+        }
+
+        override fun getItemCount() = items.size
+    }
+
+    inner class HadithAdapter(
+        private val items: List<HadithItem>,
+        private val onCopy: (HadithItem) -> Unit,
+        private val onShare: (HadithItem) -> Unit
+    ) : RecyclerView.Adapter<HadithAdapter.VH>() {
+
+        inner class VH(val card: LinearLayout) : RecyclerView.ViewHolder(card)
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
+            val card = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = RecyclerView.LayoutParams(
+                    RecyclerView.LayoutParams.MATCH_PARENT,
+                    RecyclerView.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(14) }
+                background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(10))
+                elevation = dp(3).toFloat()
+                setPadding(dp(16), dp(14), dp(16), dp(14))
+            }
+            return VH(card)
+        }
+
+        override fun onBindViewHolder(holder: VH, position: Int) {
+            val hadith = items[position]
+            holder.card.removeAllViews()
+
+            // Header row
+            val headerRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val numberBadge = TextView(this@MainActivity).apply {
+                text = "হাদিস নং: ${toBangla(hadith.hadithNumber)}"
+                textSize = 13f
+                setTextColor(Color.WHITE)
+                typeface = getBengaliTypeface()
+                background = createRoundedSolid(Color.parseColor("#01837A"), dp(20))
+                setPadding(dp(12), dp(5), dp(12), dp(5))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val spacer = View(this@MainActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(0, 0, 1f)
+            }
+            val copyBtn = ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.copy)
+                setColorFilter(Color.parseColor("#01837A"))
+                layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(10) }
+                setOnClickListener { onCopy(hadith) }
+            }
+            val shareBtn = ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.share)
+                setColorFilter(Color.parseColor("#01837A"))
+                layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
+                setOnClickListener { onShare(hadith) }
+            }
+            headerRow.addView(numberBadge)
+            headerRow.addView(spacer)
+            headerRow.addView(copyBtn)
+            headerRow.addView(shareBtn)
+
+            holder.card.addView(headerRow)
+
+            // Title
+            if (hadith.title.isNotBlank()) {
+                val titleView = TextView(this@MainActivity).apply {
+                    text = hadith.title
+                    textSize = 17f
+                    setTextColor(Color.parseColor("#01837A"))
+                    typeface = getBengaliTypeface()
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(10) }
+                }
+                holder.card.addView(titleView)
+            }
+
+            // Arabic text
+            if (hadith.descriptionAr.isNotBlank()) {
+                val arView = TextView(this@MainActivity).apply {
+                    text = hadith.descriptionAr
+                    textSize = 20f
+                    setTextColor(Color.parseColor("#333333"))
+                    typeface = getArabicTypeface()
+                    gravity = Gravity.END
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(12); bottomMargin = dp(6) }
+                }
+                holder.card.addView(arView)
+            }
+
+            // Bengali description
+            if (hadith.description.isNotBlank()) {
+                val descView = TextView(this@MainActivity).apply {
+                    text = hadith.description
+                    textSize = 15f
+                    setTextColor(Color.parseColor("#444444"))
+                    typeface = getBengaliTypeface()
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(8) }
+                }
+                holder.card.addView(descView)
+            }
+        }
+
+        override fun getItemCount() = items.size
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Global Search Result model + Adapter
+    // ─────────────────────────────────────────────────────────────
+    data class GlobalSearchResult(
+        val hadith: HadithItem,
+        val bookTitle: String,
+        val bookId: Int,
+        val sectionTitle: String,
+        val sectionId: Int
+    )
+
+    inner class GlobalSearchAdapter(
+        private val items: List<GlobalSearchResult>,
+        private val onCopy: (GlobalSearchResult) -> Unit,
+        private val onShare: (GlobalSearchResult) -> Unit
+    ) : RecyclerView.Adapter<GlobalSearchAdapter.VH>() {
+
+        inner class VH(val card: LinearLayout) : RecyclerView.ViewHolder(card)
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
+            val card = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = RecyclerView.LayoutParams(
+                    RecyclerView.LayoutParams.MATCH_PARENT,
+                    RecyclerView.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(12) }
+                background = createRoundedBg(Color.WHITE, Color.parseColor("#01837A"), dp(2), dp(10))
+                elevation = dp(3).toFloat()
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+            }
+            return VH(card)
+        }
+
+        override fun onBindViewHolder(holder: VH, position: Int) {
+            val result = items[position]
+            val hadith = result.hadith
+            holder.card.removeAllViews()
+
+            // Header row
+            val headerRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val numberBadge = TextView(this@MainActivity).apply {
+                text = "হাদিস নং: ${toBangla(hadith.hadithNumber)}"
+                textSize = 12f
+                setTextColor(Color.WHITE)
+                typeface = getBengaliTypeface()
+                background = createRoundedSolid(Color.parseColor("#01837A"), dp(20))
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+            }
+            val bookLabel = TextView(this@MainActivity).apply {
+                text = result.bookTitle
+                textSize = 11f
+                setTextColor(Color.parseColor("#01837A"))
+                typeface = getBengaliTypeface()
+                background = createRoundedBg(Color.parseColor("#E8F8F7"), Color.parseColor("#01837A"), dp(1), dp(12))
+                setPadding(dp(8), dp(3), dp(8), dp(3))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginStart = dp(8) }
+                maxWidth = dp(120)
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            val spacer = View(this@MainActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(0, 0, 1f)
+            }
+            val copyBtn = ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.copy)
+                setColorFilter(Color.parseColor("#01837A"))
+                layoutParams = LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(8) }
+                setOnClickListener { onCopy(result) }
+            }
+            val shareBtn = ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.share)
+                setColorFilter(Color.parseColor("#01837A"))
+                layoutParams = LinearLayout.LayoutParams(dp(22), dp(22))
+                setOnClickListener { onShare(result) }
+            }
+            headerRow.addView(numberBadge)
+            headerRow.addView(bookLabel)
+            headerRow.addView(spacer)
+            headerRow.addView(copyBtn)
+            headerRow.addView(shareBtn)
+            holder.card.addView(headerRow)
+
+            if (hadith.title.isNotBlank()) {
+                holder.card.addView(TextView(this@MainActivity).apply {
+                    text = hadith.title
+                    textSize = 15f
+                    setTextColor(Color.parseColor("#01837A"))
+                    typeface = getBengaliTypeface()
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(8) }
+                })
+            }
+
+            if (hadith.descriptionAr.isNotBlank()) {
+                holder.card.addView(TextView(this@MainActivity).apply {
+                    text = hadith.descriptionAr
+                    textSize = 18f
+                    setTextColor(Color.parseColor("#333333"))
+                    typeface = getArabicTypeface()
+                    gravity = Gravity.END
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(10); bottomMargin = dp(6) }
+                })
+            }
+
+            if (hadith.description.isNotBlank()) {
+                holder.card.addView(TextView(this@MainActivity).apply {
+                    text = hadith.description
+                    textSize = 14f
+                    setTextColor(Color.parseColor("#444444"))
+                    typeface = getBengaliTypeface()
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { topMargin = dp(8) }
+                })
+            }
+        }
+
+        override fun getItemCount() = items.size
     }
 }
