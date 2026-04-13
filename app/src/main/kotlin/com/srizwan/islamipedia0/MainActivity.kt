@@ -18,6 +18,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.*
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -156,6 +157,8 @@ class MainActivity : AppCompatActivity() {
     private var currentSections: List<SectionItem> = emptyList()
     private var currentHadithList: List<HadithItem> = emptyList()
 
+    private lateinit var onBackPressedCallback: OnBackPressedCallback
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -169,6 +172,14 @@ class MainActivity : AppCompatActivity() {
             flags = flags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
             window.decorView.systemUiVisibility = flags
         }
+
+        // Setup modern back press handling
+        onBackPressedCallback = object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                handleBackPress()
+            }
+        }
+        onBackPressedDispatcher.addCallback(this, onBackPressedCallback)
 
         val rootLayout = buildUI()
         setContentView(rootLayout)
@@ -206,7 +217,7 @@ class MainActivity : AppCompatActivity() {
             setImageResource(R.drawable.back)
             layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
             setColorFilter(Color.WHITE)
-            setOnClickListener { handleBack() }
+            setOnClickListener { handleBackPress() }
         }
         toolbarTitleView = TextView(this).apply {
             text = "হাদিস সমগ্র"
@@ -703,31 +714,42 @@ class MainActivity : AppCompatActivity() {
     private fun restoreFullList() {
         showContent()
         when (val s = currentState) {
-            is PageState.Books -> recyclerView.adapter = BookAdapter(currentBooks) { book ->
-                loadSections(book.id, book.titleEn)
+            is PageState.Books -> {
+                recyclerView.adapter = BookAdapter(currentBooks) { book ->
+                    loadSections(book.id, book.titleEn)
+                }
             }
-            is PageState.Sections -> recyclerView.adapter = SectionAdapter(currentSections) { section ->
-                loadHadith(s.bookId, section.id, s.bookTitle, section.title)
+            is PageState.Sections -> {
+                recyclerView.adapter = SectionAdapter(currentSections) { section ->
+                    loadHadith(s.bookId, section.id, s.bookTitle, section.title)
+                }
             }
-            is PageState.Hadith -> recyclerView.adapter = HadithAdapter(
-                currentHadithList,
-                onCopy  = { h -> copyHadith(h, s.bookTitle, s.sectionTitle) },
-                onShare = { h -> shareHadith(h, s.bookTitle, s.sectionTitle) }
-            )
+            is PageState.Hadith -> {
+                recyclerView.adapter = HadithAdapter(
+                    currentHadithList,
+                    onCopy  = { h -> copyHadith(h, s.bookTitle, s.sectionTitle) },
+                    onShare = { h -> shareHadith(h, s.bookTitle, s.sectionTitle) }
+                )
+            }
         }
     }
 
     private fun performSearch(query: String) {
         showContent()
         val term = query.lowercase().trim()
-        if (term.isBlank()) { restoreFullList(); return }
+        if (term.isBlank()) { 
+            restoreFullList()
+            return 
+        }
 
         when (val s = currentState) {
             is PageState.Books -> {
                 val filtered = currentBooks.filter { b ->
                     b.titleEn.lowercase().contains(term) || b.titleAr.contains(term)
                 }
-                recyclerView.adapter = BookAdapter(filtered) { book -> loadSections(book.id, book.titleEn) }
+                recyclerView.adapter = BookAdapter(filtered) { book -> 
+                    loadSections(book.id, book.titleEn) 
+                }
                 if (filtered.isEmpty()) showEmptySearchResult()
             }
             is PageState.Sections -> {
@@ -876,22 +898,35 @@ class MainActivity : AppCompatActivity() {
         if (withAppLink) "অ্যাপ: ইসলামী বিশ্বকোষ ও আল হাদিস\nhttps://play.google.com/store/apps/details?id=com.srizwan.islamipedia" else null
     ).joinToString("\n")
 
-    // ── Back ──────────────────────────────────────────────────────
-    private fun handleBack() {
+    // ── Modern Back Press Handling ─────────────────────────────────
+    private fun handleBackPress() {
         when {
-            isGlobalSearchOpen -> closeGlobalSearch()
-            isSearchOpen -> closeSearch()
+            isGlobalSearchOpen -> {
+                closeGlobalSearch()
+            }
+            isSearchOpen -> {
+                closeSearch()
+            }
             currentState is PageState.Hadith -> {
                 val s = currentState as PageState.Hadith
+                saveScrollPosition()
                 loadSections(s.bookId, s.bookTitle)
             }
-            currentState is PageState.Sections -> loadBooks()
-            else -> finish()
+            currentState is PageState.Sections -> {
+                saveScrollPosition()
+                loadBooks()
+                // বই লিস্টে স্ক্রল পজিশন রিস্টোর
+                recyclerView.post {
+                    if (ScrollState.booksPosition > 0) {
+                        recyclerView.scrollToPosition(ScrollState.booksPosition)
+                    }
+                }
+            }
+            else -> {
+                finish()
+            }
         }
     }
-
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() { handleBack() }
 
     override fun onDestroy() {
         super.onDestroy(); scope.cancel()
