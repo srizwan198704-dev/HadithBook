@@ -260,11 +260,20 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
             )
+            
+            // ✅ আপডেটেড: লোকাল সার্চ টেক্সট ওয়াচার (ডিবাউন্স সহ)
             addTextChangedListener(object : TextWatcher {
                 override fun afterTextChanged(s: Editable?) {
-                    searchHandler.removeCallbacks(searchRunnable ?: return)
-                    searchRunnable = Runnable { performSearch(s?.toString() ?: "") }
-                    searchHandler.postDelayed(searchRunnable!!, 300)
+                    // আগের পেন্ডিং সার্চ ক্যান্সেল করুন
+                    searchRunnable?.let { searchHandler.removeCallbacks(it) }
+                    
+                    // নতুন সার্চ রানেবল তৈরি করুন
+                    searchRunnable = Runnable { 
+                        performSearch(s?.toString() ?: "") 
+                    }
+                    
+                    // ৩০০ মিলিসেকেন্ড দেরি করে সার্চ এক্সিকিউট করুন
+                    searchRunnable?.let { searchHandler.postDelayed(it, 300) }
                 }
                 override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
                 override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
@@ -389,18 +398,32 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
             )
+            
+            // ✅ আপডেটেড: গ্লোবাল সার্চ টেক্সট ওয়াচার (ডিবাউন্স সহ)
             addTextChangedListener(object : TextWatcher {
                 override fun afterTextChanged(s: Editable?) {
-                    val q = s?.toString() ?: ""
-                    globalSearchHandler.removeCallbacks(globalSearchRunnable ?: Runnable {})
-                    if (q.trim().length < 2) {
-                        globalSearchStatus.text = "কমপক্ষে ২টি অক্ষর লিখুন..."
-                        showGlobalHint("🔍 সমস্ত হাদিস বই থেকে সার্চ করুন\n\nহাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে")
-                        return
+                    val query = s?.toString()?.trim() ?: ""
+                    
+                    // আগের পেন্ডিং সার্চ ক্যান্সেল করুন
+                    globalSearchRunnable?.let { globalSearchHandler.removeCallbacks(it) }
+                    
+                    when {
+                        query.length < 2 -> {
+                            globalSearchStatus.text = "কমপক্ষে ২টি অক্ষর লিখুন..."
+                            showGlobalHint("🔍 সমস্ত হাদিস বই থেকে সার্চ করুন\n\nহাদিস নম্বর, বাংলা অনুবাদ বা আরবি টেক্সট দিয়ে সার্চ করা যাবে")
+                        }
+                        else -> {
+                            globalSearchStatus.text = "⏳ টাইপ করা থামলে সার্চ শুরু হবে..."
+                            
+                            // নতুন সার্চ রানেবল তৈরি করুন
+                            globalSearchRunnable = Runnable { 
+                                performGlobalSearchFromCache(query) 
+                            }
+                            
+                            // ৬০০ মিলিসেকেন্ড দেরি করে সার্চ এক্সিকিউট করুন
+                            globalSearchRunnable?.let { globalSearchHandler.postDelayed(it, 600) }
+                        }
                     }
-                    globalSearchStatus.text = "⏳ টাইপ করা থামলে সার্চ শুরু হবে..."
-                    globalSearchRunnable = Runnable { performGlobalSearchFromCache(q.trim()) }
-                    globalSearchHandler.postDelayed(globalSearchRunnable!!, 600)
                 }
                 override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                 override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -717,13 +740,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ✅ আপডেটেড: closeSearch মেথড
     private fun closeSearch() {
         isSearchOpen = false
         searchContainer.visibility = View.GONE
         searchInput.setText("")
+        
+        // পেন্ডিং সার্চ ক্যান্সেল করুন
+        searchRunnable?.let { searchHandler.removeCallbacks(it) }
+        searchRunnable = null
+        
         // কিবোর্ড হাইড
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.hideSoftInputFromWindow(searchInput.windowToken, 0)
+        
         // ফিল্টার রিসেট করে ফুল লিস্ট দেখানো
         filteredBooks = currentBooks
         filteredSections = currentSections
@@ -731,9 +761,14 @@ class MainActivity : AppCompatActivity() {
         restoreFullList()
     }
 
+    // ✅ আপডেটেড: closeSearchSilently মেথড
     private fun closeSearchSilently() {
         isSearchOpen = false
-        searchHandler.removeCallbacks(searchRunnable ?: return)
+        
+        // পেন্ডিং সার্চ ক্যান্সেল করুন
+        searchRunnable?.let { searchHandler.removeCallbacks(it) }
+        searchRunnable = null
+        
         searchContainer.visibility = View.GONE
         searchInput.setText("")
         filteredBooks = currentBooks
@@ -828,9 +863,14 @@ class MainActivity : AppCompatActivity() {
         globalSearchInput.requestFocus()
     }
 
+    // ✅ আপডেটেড: closeGlobalSearch মেথড
     private fun closeGlobalSearch() {
         isGlobalSearchOpen = false
-        globalSearchHandler.removeCallbacks(globalSearchRunnable ?: Runnable {})
+        
+        // পেন্ডিং সার্চ ক্যান্সেল করুন
+        globalSearchRunnable?.let { globalSearchHandler.removeCallbacks(it) }
+        globalSearchRunnable = null
+        
         globalSearchOverlay.visibility = View.GONE
         globalSearchInput.setText("")
         globalSearchStatus.text = "সার্চ করতে টাইপ করুন..."
@@ -978,10 +1018,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ✅ আপডেটেড: onDestroy মেথড
     override fun onDestroy() {
         super.onDestroy()
         scope.cancel()
         marqueeHandler.removeCallbacksAndMessages(null)
+        
+        // সব পেন্ডিং সার্চ ক্যান্সেল করুন
+        searchRunnable?.let { searchHandler.removeCallbacks(it) }
+        globalSearchRunnable?.let { globalSearchHandler.removeCallbacks(it) }
+        
         searchHandler.removeCallbacksAndMessages(null)
         globalSearchHandler.removeCallbacksAndMessages(null)
     }
