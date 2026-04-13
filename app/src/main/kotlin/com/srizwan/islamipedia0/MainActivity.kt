@@ -90,7 +90,6 @@ fun String.toHtmlSpanned(): Spanned =
     else
         @Suppress("DEPRECATION") Html.fromHtml(this)
 
-/** Strip all HTML tags → plain text */
 fun String.stripHtml(): String =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N)
         Html.fromHtml(this, Html.FROM_HTML_MODE_LEGACY).toString().trim()
@@ -133,6 +132,14 @@ class MainActivity : AppCompatActivity() {
     private val globalSearchHandler = Handler(Looper.getMainLooper())
     private var globalSearchRunnable: Runnable? = null
     private val marqueeHandler = Handler(Looper.getMainLooper())
+
+    // ─────────────────────────────────────────────────────────────
+    // Tracks last full (unfiltered) list for each state
+    // so search can always filter from the original data
+    // ─────────────────────────────────────────────────────────────
+    private var currentBooks: List<BookItem> = emptyList()
+    private var currentSections: List<SectionItem> = emptyList()
+    private var currentHadithList: List<HadithItem> = emptyList()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -431,7 +438,10 @@ class MainActivity : AppCompatActivity() {
         retry?.let { r -> retryButton.setOnClickListener { r() } }
     }
 
-    private fun showContent() { statusView.visibility = View.GONE; recyclerView.visibility = View.VISIBLE }
+    private fun showContent() {
+        statusView.visibility = View.GONE
+        recyclerView.visibility = View.VISIBLE
+    }
 
     // ─────────────────────────────────────────────────────────────
     // Cache helpers
@@ -452,11 +462,6 @@ class MainActivity : AppCompatActivity() {
         File(dir, cacheFileName(key)).writeText(data)
     }
 
-    /**
-     * Smart fetch strategy:
-     * 1. Disk cache exists → return immediately, no network
-     * 2. No cache → fetch network, save to disk
-     */
     private suspend fun fetchJson(url: String, cacheKey: String): String {
         getCachedData(cacheKey)?.let { cached ->
             withContext(Dispatchers.Main) { offlineIndicator.visibility = View.GONE }
@@ -484,14 +489,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Load Books — memory → disk → network (no repeat load)
+    // Load Books
     // ─────────────────────────────────────────────────────────────
     private fun loadBooks() {
         currentState = PageState.Books
         updateToolbar("হাদিস সমগ্র")
+        // Reset search when navigating
+        closeSearchSilently()
 
         val memBooks = HadithCache.books
         if (memBooks != null) {
+            currentBooks = memBooks
             showContent()
             recyclerView.adapter = BookAdapter(memBooks) { book -> loadSections(book.id, book.titleEn) }
             recyclerView.scrollToPosition(0)
@@ -507,6 +515,7 @@ class MainActivity : AppCompatActivity() {
                 )
                 val books = parseBooks(json)
                 HadithCache.books = books
+                currentBooks = books
                 showContent()
                 recyclerView.adapter = BookAdapter(books) { book -> loadSections(book.id, book.titleEn) }
                 recyclerView.scrollToPosition(0)
@@ -529,14 +538,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Load Sections — memory → disk → network (no repeat load)
+    // Load Sections
     // ─────────────────────────────────────────────────────────────
     private fun loadSections(bookId: Int, bookTitle: String) {
         currentState = PageState.Sections(bookId, bookTitle)
         updateToolbar(bookTitle)
+        // Reset search when navigating
+        closeSearchSilently()
 
         val memSections = HadithCache.sections[bookId]
         if (memSections != null) {
+            currentSections = memSections
             showContent()
             recyclerView.adapter = SectionAdapter(memSections) { section ->
                 loadHadith(bookId, section.id, bookTitle, section.title)
@@ -554,6 +566,7 @@ class MainActivity : AppCompatActivity() {
                 )
                 val sections = parseSections(json)
                 HadithCache.sections[bookId] = sections
+                currentSections = sections
                 showContent()
                 recyclerView.adapter = SectionAdapter(sections) { section ->
                     loadHadith(bookId, section.id, bookTitle, section.title)
@@ -578,15 +591,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Load Hadith — memory → disk → network (no repeat load)
+    // Load Hadith
     // ─────────────────────────────────────────────────────────────
     private fun loadHadith(bookId: Int, sectionId: Int, bookTitle: String, sectionTitle: String) {
         currentState = PageState.Hadith(bookId, sectionId, bookTitle, sectionTitle)
         updateToolbar(sectionTitle)
+        // Reset search when navigating
+        closeSearchSilently()
         val key = "${bookId}_$sectionId"
 
         val memHadith = HadithCache.hadith[key]
         if (memHadith != null) {
+            currentHadithList = memHadith
             showContent()
             recyclerView.adapter = HadithAdapter(memHadith,
                 onCopy = { h -> copyHadith(h, bookTitle, sectionTitle) },
@@ -605,6 +621,7 @@ class MainActivity : AppCompatActivity() {
                 )
                 val hadithList = parseHadith(json)
                 HadithCache.hadith[key] = hadithList
+                currentHadithList = hadithList
                 showContent()
                 recyclerView.adapter = HadithAdapter(hadithList,
                     onCopy = { h -> copyHadith(h, bookTitle, sectionTitle) },
@@ -632,59 +649,122 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Page-level Search
+    // Page-level Search  ← FIXED
     // ─────────────────────────────────────────────────────────────
+
     private fun toggleSearch() {
-        if (isSearchOpen) { isSearchOpen = false; searchContainer.visibility = View.GONE
-            searchInput.setText(""); performSearch("") }
-        else { isSearchOpen = true; searchContainer.visibility = View.VISIBLE; searchInput.requestFocus() }
+        if (isSearchOpen) {
+            closeSearch()
+        } else {
+            isSearchOpen = true
+            searchContainer.visibility = View.VISIBLE
+            searchInput.requestFocus()
+        }
     }
 
+    /** Closes search bar AND resets the list — called by the user via back/toggle */
     private fun closeSearch() {
-        isSearchOpen = false; searchContainer.visibility = View.GONE
-        searchInput.setText(""); performSearch("")
+        isSearchOpen = false
+        searchContainer.visibility = View.GONE
+        // Suppress the TextWatcher while clearing
+        searchInput.removeTextChangedListener(null)
+        searchInput.setText("")
+        // Restore full list
+        restoreFullList()
+    }
+
+    /**
+     * Silently hides the search bar (without triggering a list-restore),
+     * used when navigating between pages.
+     */
+    private fun closeSearchSilently() {
+        isSearchOpen = false
+        searchHandler.removeCallbacks(searchRunnable ?: return)
+        searchContainer.visibility = View.GONE
+        searchInput.setText("")
+    }
+
+    /** Re-display the full (unfiltered) data for the current state */
+    private fun restoreFullList() {
+        showContent()
+        when (val s = currentState) {
+            is PageState.Books -> {
+                recyclerView.adapter = BookAdapter(currentBooks) { book ->
+                    loadSections(book.id, book.titleEn)
+                }
+            }
+            is PageState.Sections -> {
+                recyclerView.adapter = SectionAdapter(currentSections) { section ->
+                    loadHadith(s.bookId, section.id, s.bookTitle, section.title)
+                }
+            }
+            is PageState.Hadith -> {
+                recyclerView.adapter = HadithAdapter(
+                    currentHadithList,
+                    onCopy  = { h -> copyHadith(h, s.bookTitle, s.sectionTitle) },
+                    onShare = { h -> shareHadith(h, s.bookTitle, s.sectionTitle) }
+                )
+            }
+        }
+        recyclerView.scrollToPosition(0)
     }
 
     private fun performSearch(query: String) {
-        val s = currentState
-        if (query.isBlank()) {
-            when (s) {
-                is PageState.Books -> HadithCache.books?.let { b ->
-                    recyclerView.adapter = BookAdapter(b) { loadSections(it.id, it.titleEn) } }
-                is PageState.Sections -> HadithCache.sections[s.bookId]?.let { sec ->
-                    recyclerView.adapter = SectionAdapter(sec) { ss ->
-                        loadHadith(s.bookId, ss.id, s.bookTitle, ss.title) } }
-                is PageState.Hadith -> HadithCache.hadith["${s.bookId}_${s.sectionId}"]?.let { list ->
-                    recyclerView.adapter = HadithAdapter(list,
-                        onCopy = { h -> copyHadith(h, s.bookTitle, s.sectionTitle) },
-                        onShare = { h -> shareHadith(h, s.bookTitle, s.sectionTitle) }) }
-            }
+        // Always make RecyclerView visible while searching/restoring
+        showContent()
+
+        val term = query.lowercase().trim()
+
+        if (term.isBlank()) {
+            restoreFullList()
             return
         }
-        val term = query.lowercase().trim()
-        when (s) {
+
+        when (val s = currentState) {
             is PageState.Books -> {
-                val f = HadithCache.books?.filter {
-                    it.titleEn.lowercase().contains(term) || it.titleAr.contains(term) } ?: emptyList()
-                recyclerView.adapter = BookAdapter(f) { loadSections(it.id, it.titleEn) }
+                val filtered = currentBooks.filter { book ->
+                    book.titleEn.lowercase().contains(term) ||
+                    book.titleAr.contains(term)
+                }
+                recyclerView.adapter = BookAdapter(filtered) { book ->
+                    loadSections(book.id, book.titleEn)
+                }
+                if (filtered.isEmpty()) showEmptySearchResult()
             }
+
             is PageState.Sections -> {
-                val f = HadithCache.sections[s.bookId]?.filter {
-                    it.title.lowercase().contains(term) || it.titleAr.contains(term) } ?: emptyList()
-                recyclerView.adapter = SectionAdapter(f) { ss ->
-                    loadHadith(s.bookId, ss.id, s.bookTitle, ss.title) }
+                val filtered = currentSections.filter { section ->
+                    section.title.lowercase().contains(term) ||
+                    section.titleAr.contains(term)
+                }
+                recyclerView.adapter = SectionAdapter(filtered) { section ->
+                    loadHadith(s.bookId, section.id, s.bookTitle, section.title)
+                }
+                if (filtered.isEmpty()) showEmptySearchResult()
             }
+
             is PageState.Hadith -> {
-                val f = HadithCache.hadith["${s.bookId}_${s.sectionId}"]?.filter {
-                    it.hadithNumber.toString().contains(term) ||
-                    it.title.stripHtml().lowercase().contains(term) ||
-                    it.description.stripHtml().lowercase().contains(term) ||
-                    it.descriptionAr.contains(term) } ?: emptyList()
-                recyclerView.adapter = HadithAdapter(f,
-                    onCopy = { h -> copyHadith(h, s.bookTitle, s.sectionTitle) },
-                    onShare = { h -> shareHadith(h, s.bookTitle, s.sectionTitle) })
+                val filtered = currentHadithList.filter { h ->
+                    h.hadithNumber.toString().contains(term) ||
+                    h.title.stripHtml().lowercase().contains(term) ||
+                    h.description.stripHtml().lowercase().contains(term) ||
+                    h.descriptionAr.contains(term)
+                }
+                recyclerView.adapter = HadithAdapter(
+                    filtered,
+                    onCopy  = { h -> copyHadith(h, s.bookTitle, s.sectionTitle) },
+                    onShare = { h -> shareHadith(h, s.bookTitle, s.sectionTitle) }
+                )
+                if (filtered.isEmpty()) showEmptySearchResult()
             }
         }
+        recyclerView.scrollToPosition(0)
+    }
+
+    /** Shows a "no results" message inside the status overlay without hiding the recycler completely */
+    private fun showEmptySearchResult() {
+        // Keep recycler visible (it has 0 items) but also show a subtle toast
+        Toast.makeText(this, "কোনো ফলাফল পাওয়া যায়নি", Toast.LENGTH_SHORT).show()
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -750,17 +830,20 @@ class MainActivity : AppCompatActivity() {
 
             withContext(Dispatchers.Main) {
                 when {
-                    totalHadith == 0 -> { globalSearchStatus.text = "ক্যাশে হাদিস ডাটা নেই"
-                        showGlobalHint("😔 ক্যাশে কোনো হাদিস ডাটা নেই।\nপ্রথমে বই খুলুন, তারপর সার্চ করুন।") }
+                    totalHadith == 0 -> {
+                        globalSearchStatus.text = "ক্যাশে হাদিস ডাটা নেই"
+                        showGlobalHint("😔 ক্যাশে কোনো হাদিস ডাটা নেই।\nপ্রথমে বই খুলুন, তারপর সার্চ করুন।")
+                    }
                     results.isEmpty() -> {
                         globalSearchStatus.text = "মোট ${toBangla(totalHadith)} টি হাদিস — কোনো ফলাফল নেই"
-                        showGlobalHint("😔 \"$query\" এর জন্য কোনো হাদিস পাওয়া যায়নি।") }
+                        showGlobalHint("😔 \"$query\" এর জন্য কোনো হাদিস পাওয়া যায়নি।")
+                    }
                     else -> {
                         globalSearchStatus.text = "✅ ${toBangla(results.size)} টি হাদিস পাওয়া গেছে"
                         globalSearchHint.visibility = View.GONE
                         globalSearchRecycler.visibility = View.VISIBLE
                         globalSearchRecycler.adapter = GlobalSearchAdapter(results,
-                            onCopy = { r -> copyHadith(r.hadith, r.bookTitle, r.sectionTitle) },
+                            onCopy  = { r -> copyHadith(r.hadith, r.bookTitle, r.sectionTitle) },
                             onShare = { r -> shareHadith(r.hadith, r.bookTitle, r.sectionTitle) })
                     }
                 }
@@ -769,7 +852,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Copy / Share — HTML stripped
+    // Copy / Share
     // ─────────────────────────────────────────────────────────────
     private fun copyHadith(hadith: HadithItem, bookTitle: String, sectionTitle: String) {
         val text = buildPlainText(hadith, bookTitle, sectionTitle, withAppLink = false)
@@ -803,8 +886,10 @@ class MainActivity : AppCompatActivity() {
         when {
             isGlobalSearchOpen -> closeGlobalSearch()
             isSearchOpen -> closeSearch()
-            currentState is PageState.Hadith -> { val s = currentState as PageState.Hadith
-                loadSections(s.bookId, s.bookTitle) }
+            currentState is PageState.Hadith -> {
+                val s = currentState as PageState.Hadith
+                loadSections(s.bookId, s.bookTitle)
+            }
             currentState is PageState.Sections -> loadBooks()
             else -> finish()
         }
@@ -849,10 +934,6 @@ class MainActivity : AppCompatActivity() {
             setColor(fillColor); cornerRadius = radius.toFloat()
         }
 
-    /**
-     * If raw string has HTML tags → render with Html.fromHtml (bold, italic, etc.)
-     * Otherwise → plain text. Either way makes the TextView selectable.
-     */
     private fun TextView.setSmartText(raw: String) {
         if (raw.containsHtml()) setText(raw.toHtmlSpanned()) else text = raw
         setTextIsSelectable(true)
@@ -993,7 +1074,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Hadith Adapter — HTML rendered + selectable
+    // Hadith Adapter
     // ─────────────────────────────────────────────────────────────
     inner class HadithAdapter(
         private val items: List<HadithItem>,
@@ -1017,7 +1098,6 @@ class MainActivity : AppCompatActivity() {
         override fun onBindViewHolder(holder: VH, position: Int) {
             val hadith = items[position]; holder.card.removeAllViews()
 
-            // Header row
             val headerRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 layoutParams = LinearLayout.LayoutParams(
@@ -1043,7 +1123,6 @@ class MainActivity : AppCompatActivity() {
             })
             holder.card.addView(headerRow)
 
-            // Title — HTML + selectable
             if (hadith.title.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     textSize = 17f; setTextColor(Color.parseColor("#01837A")); typeface = getBengaliTypeface()
@@ -1053,8 +1132,6 @@ class MainActivity : AppCompatActivity() {
                     setSmartText(hadith.title)
                 })
             }
-
-            // Arabic — HTML + selectable
             if (hadith.descriptionAr.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     textSize = 20f; setTextColor(Color.parseColor("#333333")); typeface = getArabicTypeface()
@@ -1065,8 +1142,6 @@ class MainActivity : AppCompatActivity() {
                     setSmartText(hadith.descriptionAr)
                 })
             }
-
-            // Bengali — HTML + selectable
             if (hadith.description.isNotBlank()) {
                 holder.card.addView(TextView(this@MainActivity).apply {
                     textSize = 15f; setTextColor(Color.parseColor("#444444")); typeface = getBengaliTypeface()
@@ -1082,7 +1157,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Global Search Adapter — HTML rendered + selectable
+    // Global Search Adapter
     // ─────────────────────────────────────────────────────────────
     data class GlobalSearchResult(
         val hadith: HadithItem, val bookTitle: String, val bookId: Int,
