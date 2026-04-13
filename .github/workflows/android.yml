@@ -7,6 +7,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      # ⏱️ Increase timeout (fix gradle download issue)
+      GRADLE_OPTS: "-Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=60000"
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -17,11 +21,26 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # ⚡ Cache Gradle (faster + avoids re-download)
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*') }}
+          restore-keys: |
+            gradle-${{ runner.os }}
+
       - name: Grant Permission
         run: chmod +x gradlew
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug
+      # 🔁 Retry করলে timeout problem অনেক কমে
+      - name: Build Debug APK (Retry)
+        run: |
+          for i in 1 2 3; do
+            ./gradlew assembleDebug && break || sleep 15
+          done
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
